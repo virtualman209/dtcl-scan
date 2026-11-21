@@ -1,0 +1,27 @@
+{
+  "_ghi_chu": "Đáp án do người điều phối đọc bằng mắt từ ảnh chụp màn hình thật của người dùng (client TFT tiếng Việt, Set 18). Các ảnh hud_*.png là khung game đã cắt ra từ ảnh chụp cửa sổ Căn chỉnh vùng và phóng về 1920x1080, nên CÓ vẽ đè khung vàng/đỏ + nhãn của tool (shop1, gold, players…). Ảnh gốc ở tests/fixtures/raw/. Tên tướng/tộc hệ có dấu tiếng Việt: khi so khớp dùng ocr.norm() (bỏ dấu, chữ thường).",
+  "hud_2-7.png": {
+    "round": "2-7", "gold": 38, "level": 5, "xp": "4/20",
+    "shop": ["Cua Kỳ Cục", "Leona", "Kobuko", "Xayah", ""],
+    "traits": [["Tân Phá", 4], ["Gai Đen", 2], ["Hỏa Ngục", 1], ["Thích Ứng", 1], ["Đấu Sĩ", 1], ["Quái Rừng", 1], ["Tiên Hắc Ám", 1]],
+    "players_panel": "damage",
+    "hp_me": 87,
+    "hp_others": null
+  },
+  "hud_3-5_a.png": {
+    "round": "3-5", "gold": 43, "level": 7, "xp": "0/56",
+    "shop": ["Kha'Zix", "Teemo", "Cassiopeia", "", "Mâm Non"],
+    "traits": [["Tân Phá", 4], ["Hỏa Ngục", 2], ["Gai Đen", 2], ["Đấu Sĩ", 2], ["Dũng Sĩ", 1], ["Thích Ứng", 1], ["Quái Rừng", 1], ["Thần Rừng", 1], ["Tiên Hắc Ám", 1]],
+    "players_panel": "ok",
+    "hp_me": 87,
+    "hp_others": [103, 80, 75, 68, 62, 60, 58]
+  },
+  "hud_3-5_b.png": {
+    "round": "3-5", "gold": 43, "level": 7, "xp": "0/56",
+    "shop": ["Kha'Zix", "Teemo", "Cassiopeia", "", "Mâm Non"],
+    "traits": [["Tân Phá", 4], ["Hỏa Ngục", 2], ["Gai Đen", 2], ["Đấu Sĩ", 2], ["Dũng Sĩ", 1], ["Thích Ứng", 1], ["Quái Rừng", 1], ["Thần Rừng", 1], ["Tiên Hắc Ám", 1]],
+    "players_panel": "ok",
+    "hp_me": 87,
+    "hp_others": [103, 80, 75, 68, 62, 60, 47]
+  }
+}
