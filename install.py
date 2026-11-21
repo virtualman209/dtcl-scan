@@ -81,10 +81,26 @@ def write_config():
         print("   hoặc chép ffmpeg.exe, ffprobe.exe vào thư mục: " + os.path.join(APP, "bin"))
     if "tesseract" not in cfg:
         print("\n!! Thiếu Tesseract OCR. Cài bằng:  winget install UB-Mannheim.TesseractOCR   rồi chạy lại install.bat")
+    elif "vie" not in langs:
+        try:
+            import ocr
+            have_vie = "vie" in ocr.available_langs()
+        except Exception:  # noqa: BLE001
+            have_vie = False
+        if not have_vie:
+            print("\n!! Thiếu dữ liệu OCR tiếng Việt (vie.traineddata). Chạy lại install.bat để tải, hoặc chép vào: "
+                  + td)
 
 
 def check():
     miss = core.missing_bins()
+    if "tesseract" not in miss:
+        try:
+            import ocr
+            if "vie" not in ocr.available_langs():
+                miss.append("tessdata-vie")         # thiếu dữ liệu tiếng Việt → tên tộc/hệ đọc kém
+        except Exception:  # noqa: BLE001
+            miss.append("tessdata-vie")
     try:
         import cv2  # noqa: F401
         import numpy  # noqa: F401

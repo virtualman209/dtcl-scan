@@ -52,16 +52,12 @@ DEFAULT = {"name": "default_1080p", "calibrated": False, "aspect": "16:9", "boxe
 
 
 def list_profiles():
+    """Không ghi profile mặc định ra đĩa: toạ độ mặc định luôn lấy từ code (bản cập nhật sửa toạ độ là có tác dụng)."""
     try:
-        os.makedirs(core.PROFILE_DIR, exist_ok=True)
         names = sorted(f[:-5] for f in os.listdir(core.PROFILE_DIR) if f.endswith(".json"))
     except OSError:
         names = []
     if DEFAULT["name"] not in names:
-        try:
-            save(DEFAULT)
-        except OSError:
-            pass                        # thư mục không ghi được → vẫn dùng toạ độ mặc định trong bộ nhớ
         names.insert(0, DEFAULT["name"])
     return names
 
@@ -73,7 +69,10 @@ def load(name):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         prof.update({k: v for k, v in data.items() if k != "boxes"})
-        prof["boxes"].update(data.get("boxes", {}))
+        # profile chưa được người dùng căn chỉnh (vd. default_1080p.json do bản cũ tự ghi ra) → dùng toạ độ
+        # mặc định MỚI trong code, không kẹt toạ độ cũ sau khi cập nhật
+        if data.get("calibrated"):
+            prof["boxes"].update(data.get("boxes", {}))
     except Exception:
         pass
     prof["name"] = name

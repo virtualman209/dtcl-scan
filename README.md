@@ -49,7 +49,7 @@ Gỡ cài đặt: chạy `uninstall.bat` trong thư mục cài đặt.
 Mỗi độ phân giải / tỉ lệ màn hình nên có 1 profile riêng (*Lưu thành profile mới…*). Toạ độ mặc định chỉ là ước lượng cho 16:9.
 
 Mẹo quay video: 1080p (hoặc 720p trở lên), chỉ quay màn hình game, không che HUD bằng camera/overlay.
-Client tiếng Việt: vào **Cài đặt…** đặt Ngôn ngữ OCR là `eng+vie`. Điền **Tên trong game** để tool tìm đúng dòng máu của bạn.
+Client tiếng Việt: Ngôn ngữ OCR để `auto` (dùng `eng+vie` nếu đã có dữ liệu tiếng Việt). Dòng máu của bạn được tự nhận ra nhờ số máu TO.
 Có thể điền tên tướng của mùa hiện tại vào `champions.txt` để OCR tự sửa tên đọc sai.
 
 ## Hạn chế
@@ -58,6 +58,7 @@ Có thể điền tên tướng của mùa hiện tại vào `champions.txt` đ�
 - Mua / roll quá nhanh trong chưa đầy 0,5 giây có thể bị gộp. Tăng *Số khung/giây đọc* lên 3–4 nếu cần.
 - Không có AI thì tool **không nhận diện được tướng trên bàn cờ** (chỉ đọc chữ). Bật *AI đọc bàn cờ* nếu cần đội hình chi tiết.
 - Giá từng tướng được suy từ lượng vàng giảm, nên có thể lệch khi mua nhiều thứ cùng lúc.
+- Máu người khác (số nhỏ ở cột bên phải) chỉ đọc được ở video 1080p trở lên. Video thấp hơn hoặc vùng khoanh lệch: tool để trống / ghi trạng thái `uncertain`, `low_res` thay vì đoán (máu của bạn vẫn đọc được).
 
 ## Dòng lệnh
 

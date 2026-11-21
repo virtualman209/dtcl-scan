@@ -28,6 +28,7 @@ import layout  # noqa: E402
 import ocr  # noqa: E402
 
 SAME = object()
+REREAD_SEC = 8.0
 
 
 def round_key(r):
@@ -40,7 +41,7 @@ def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end
     boxes = prof["boxes"]
     workers = max(2, min(12, (os.cpu_count() or 4)))
     pool = ThreadPoolExecutor(workers)
-    last_small, recheck, entries, outstanding = {}, {}, [], []
+    last_small, recheck, last_read, entries, outstanding = {}, {}, {}, [], []
     end_t = end or info["duration"]
     span = max(1.0, end_t - start)
     t_last_log = 0
@@ -51,9 +52,11 @@ def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end
                 c = layout.crop(frame, boxes[key])
                 small = cv2.resize(c.max(axis=2), (48, 12), interpolation=cv2.INTER_AREA).astype(np.int16)
                 prev = last_small.get(key)
-                if prev is not None and np.abs(small - prev).mean() < 2.0 and not recheck.get(key):
+                if prev is not None and np.abs(small - prev).mean() < 2.0 and not recheck.get(key) \
+                        and (key in layout.SHOP or t - last_read.get(key, -1e9) < REREAD_SEC):
                     e[key] = SAME
                     continue
+                last_read[key] = t     # số: hình không đổi vẫn đọc lại mỗi REREAD_SEC giây → lần đọc sai không "dính" mãi
                 # vừa đổi → khung sau đọc lại 1 lần nữa dù trông giống (khung chuyển cảnh / nén có thể đọc sai,
                 # nếu không đọc lại thì giá trị sai bị giữ suốt tới lần đổi sau)
                 recheck[key] = prev is None or np.abs(small - prev).mean() >= 2.0
@@ -144,10 +147,15 @@ def snap_shop_names(samples, fps):
             s[k] = snap(s.get(k))
 
 
-def stabilize(vals, confirm=2, order=None):
-    """Chỉ nhận giá trị mới khi nó lặp lại `confirm` lần liên tiếp. order(v)→số để chặn đi lùi."""
-    out, cur, cand, n = [], None, None, 0
-    for v in vals:
+def stabilize(vals, confirm=2, order=None, back_confirm=None):
+    """Chỉ nhận giá trị mới khi nó lặp lại `confirm` lần liên tiếp; khi nhận thì ghi lùi về mẫu ĐẦU TIÊN
+    đọc ra giá trị đó (để mọi chuỗi vòng / vàng / XP đổi cùng một mốc, không lệch nhau 1–2 mẫu).
+    order(v)→số: giá trị đi lùi (vd. vòng nhỏ hơn) chỉ được nhận khi lặp lại lâu hơn (`back_confirm` lần) —
+    sửa được trường hợp đọc nhầm ra vòng lớn hơn rồi kẹt ở đó; nếu giá trị sai chỉ giữ một lúc ngắn
+    thì xoá luôn đoạn sai đó."""
+    back_confirm = back_confirm or max(confirm + 2, 5)
+    out, cur, cur_start, cand, n, cand_start = [], None, 0, None, 0, 0
+    for i, v in enumerate(vals):
         if v is None:
             out.append(cur)
             continue
@@ -156,11 +164,16 @@ def stabilize(vals, confirm=2, order=None):
         elif v == cand:
             n += 1
         else:
-            cand, n = v, 1
-        if cand is not None and n >= confirm:
-            if cur is None or order is None or order(cand) >= order(cur):
-                cur = cand
-            cand, n = None, 0
+            cand, n, cand_start = v, 1, i
+        if cand is not None:
+            back = cur is not None and order is not None and order(cand) < order(cur)
+            if n >= (back_confirm if back else confirm):
+                start = cand_start
+                if back and cand_start - cur_start <= 6 * back_confirm:
+                    start = cur_start              # giá trị "lớn hơn" chỉ thoáng qua → coi là đọc nhầm
+                for k in range(start, i):
+                    out[k] = cand
+                cur, cur_start, cand, n = cand, start, None, 0
         out.append(cur)
     return out
 
@@ -355,6 +368,11 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
         r["traits_raw"] = ocr.read_traits(layout.crop(frame, prof["boxes"]["traits"]), lang)
         r["traits"] = ocr.parse_traits(r["traits_raw"])
         r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name)
+        if r["players_panel"] in ("ok", "uncertain") and info["h"] and info["h"] < 900:
+            # video dưới 1080p: số máu người khác chỉ cao ~5px → hay đọc sai mà vẫn đúng thứ tự → không khẳng định
+            r["players_panel"] = "low_res"
+        if r["players_panel"] == "low_res":
+            r["players"] = [p for p in r["players"] if p["me"]]     # máu người khác: để trống, không đoán
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
         r["hp_others"] = [p["hp"] for p in r["players"] if not p["me"]]
@@ -369,19 +387,21 @@ def read_players_vote(frames, prof, lang, player_name=""):
     base, status = reads[0]
     if len(reads) == 1:
         return base, status
-    oks = [rd for rd in reads if rd[1] == "ok"]
+    oks = [rd for rd in reads if rd[1] == "ok"] or [rd for rd in reads if rd[1] == "uncertain"]
     if oks:
         # khung có số dòng phổ biến nhất (ưu tiên khung đầu)
         n_common = Counter(len(p) for p, _ in oks).most_common(1)[0][0]
         same = [p for p, _ in oks if len(p) == n_common]
         base = same[0]
-        status = "ok"
+        status = oks[0][1]
         voted = []
         for i, row in enumerate(base):
             vals = [p[i]["hp"] for p in same if p[i]["me"] == row["me"]]
             best = max(vals, key=lambda v: (vals.count(v), -vals.index(v)))
             voted.append(dict(row, hp=best))
-        base = voted
+        base, dropped = ocr._keep_descending(voted)
+        if dropped:
+            status = "uncertain"
     return base, status
 
 
@@ -498,7 +518,7 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
               + layout.SHOP + ["round_raw", "gold_raw", "level_raw", "xp_raw"])
     write_csv(os.path.join(out, "events.csv"), events, ["time", "t", "round", "type", "detail", "gold", "gold_after"])
     write_csv(os.path.join(out, "rounds.csv"), rounds,
-              ["round", "time", "duration", "level", "xp", "hp", "rank_hp", "hp_others", "gold_start", "gold_end", "gold_max", "spent",
+              ["round", "time", "duration", "level", "xp", "hp", "rank_hp", "hp_others", "players_panel", "gold_start", "gold_end", "gold_max", "spent",
                "rolls", "xp_buys", "bought", "level_up", "keyframe"])
     if opts.get("chat_pack", True) and any(r.get("keyframe") for r in rounds):
         import chatpack

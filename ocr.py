@@ -299,7 +299,7 @@ def classify_digit(mask):
     return lab, best[lab]
 
 
-def _decode_digits(b, lab_info, min_h, scale):
+def _decode_digits(b, lab_info, min_h, scale, right=False):
     n, lab, st = lab_info
     H, W = b.shape
     comps = []
@@ -321,8 +321,20 @@ def _decode_digits(b, lab_info, min_h, scale):
         else:
             lines.append({"cy": cy, "h": c[3], "c": [c]})
     best = max(lines, key=lambda ln: (len(ln["c"]), ln["h"]))
+    comps = sorted(best["c"])
+    if right:
+        # chỉ lấy cụm chữ số sát nhau nằm bên PHẢI nhất (ô máu nằm sát ảnh đại diện; mảnh chữ tên
+        # người chơi lọt vào vùng khi khoanh lệch thì nằm bên trái, cách xa hơn)
+        groups = [[comps[0]]]
+        for c in comps[1:]:
+            p = groups[-1][-1]
+            if c[0] - (p[0] + p[2]) <= 0.8 * max(c[3], p[3]):
+                groups[-1].append(c)
+            else:
+                groups.append([c])
+        comps = groups[-1]
     txt, conf = "", []
-    for x, y, w, h, i in sorted(best["c"]):
+    for x, y, w, h, i in comps:
         m = (lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255
         parts = (m[:, :w // 2], m[:, w // 2:]) if w > 0.85 * h else (m,)   # 2 chữ số dính nhau
         for part in parts:
@@ -333,7 +345,7 @@ def _decode_digits(b, lab_info, min_h, scale):
     return txt, conf
 
 
-def read_digits(img_bgr, scale=6, min_h=0):
+def read_digits(img_bgr, scale=6, min_h=0, right=False):
     """Đọc 1 số nhỏ (chữ trắng trên nền tối) bằng so khớp mẫu từng chữ số, thử 3 mức ngưỡng
     (chữ dày/mảnh khác nhau) rồi lấy theo đa số. Trả (chuỗi, số, độ tin cậy)."""
     if img_bgr is None or img_bgr.size == 0:
@@ -345,7 +357,7 @@ def read_digits(img_bgr, scale=6, min_h=0):
     for k in (0.3, 0.2, 0.1, 0.0):
         _, b = cv2.threshold(g, otsu + (top - otsu) * k, 255, cv2.THRESH_BINARY)
         n, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
-        txt, conf = _decode_digits(b, (n, lab, st), min_h, scale)
+        txt, conf = _decode_digits(b, (n, lab, st), min_h, scale, right)
         v = parse_int(txt, 0, 150) if txt else None
         if v is not None and len(txt) <= 3:
             votes.append((txt, v, min(conf)))
@@ -382,25 +394,33 @@ def _dark_runs(mask, lo, close=4):
     return out
 
 
+# tham số đã dò trên ảnh thật + biến thể (xem tests/test_robust.py); đổi thì chạy lại test
+PL_CFG = {"cols": (0.62, 0.88), "pct": 50, "dark": 75, "x0": 0.58, "right": False, "close": 8}
+
+
 def read_players(crop_img, lang="eng", player_name=""):
     """Cột số máu bên phải. Vùng cần khoanh: từ mép trái số máu TO của bạn tới mép phải ô máu nhỏ
     của người khác (không lấy tên, không lấy ảnh đại diện), từ người trên cùng tới người dưới cùng.
     Mỗi người khác có 1 ô tối nhỏ chứa số máu; dòng của bạn được phóng to, số máu to hơn, không có ô nhỏ.
-    Trả về ([{'y','hp','me','conf'}], trạng thái)."""
+    Bảng TFT luôn xếp theo máu giảm dần → dòng nào phá thứ tự là đọc sai: bỏ đi và hạ trạng thái.
+    Trả về ([{'y','hp','me','conf'}], trạng thái): 'ok' | 'uncertain' (có dòng bị loại) | 'unknown' | 'empty'."""
     if crop_img is None or crop_img.size == 0:
         return [], "empty"
     H, W = crop_img.shape[:2]
     g = whiteness(crop_img).astype(np.float32)
-    med = np.median(g[:, int(0.62 * W):int(0.88 * W)], axis=1)
+    c0, c1 = PL_CFG["cols"]
+    # dòng = dải ô tối (trung vị độ trắng theo hàng ngang thấp)
+    prof = np.percentile(g[:, int(c0 * W):max(int(c0 * W) + 1, int(c1 * W))], PL_CFG["pct"], axis=1)
     out = []
+    x_other = int(PL_CFG["x0"] * W)
 
     def other(y0, y1):
         L = y1 - y0
-        txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), int(0.58 * W):W])
+        txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), x_other:W], right=PL_CFG["right"])
         if v is not None and c >= 0.65:
             out.append({"y": int(y0), "hp": v, "me": False, "conf": round(c, 2), "raw": txt})
 
-    for y0, y1 in _dark_runs(med < 75, 28):
+    for y0, y1 in _dark_runs(prof < PL_CFG["dark"], 28, PL_CFG["close"]):
         L = y1 - y0
         if L <= 62:
             other(y0, y1)
@@ -412,11 +432,39 @@ def read_players(crop_img, lang="eng", player_name=""):
             out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
         if L - top >= 28:
             other(y1 - 44, y1)
+    out, dropped = _keep_descending(out)
     # cần thấy ít nhất 3 dòng (bạn + 2 người) mới coi là đang hiện bảng máu; ít hơn thường là
     # bảng đang hiện thứ khác (thống kê sát thương…) hoặc vùng khoanh chưa đúng
     if len(out) < 3:
         return out, "unknown"
+    if dropped:
+        return out, "uncertain"
     return out, "ok"
+
+
+def _keep_descending(rows):
+    """Giữ dãy con dài nhất có máu không tăng (từ trên xuống), ưu tiên giữ dòng của bạn và dòng tin cậy cao.
+    Trả (các dòng giữ lại, số dòng bị loại)."""
+    n = len(rows)
+    if n < 2:
+        return rows, 0
+
+    def w(r):      # dòng của bạn (số to, rõ) đáng tin hơn; số 1 chữ số hay là mảnh vỡ → hơi kém tin
+        return 1 + (2 if r["me"] else 0) + r["conf"] - (0.3 if r["hp"] < 10 else 0)
+    best = [(w(r), -1) for r in rows]
+    for i in range(n):
+        for j in range(i):
+            if rows[j]["hp"] >= rows[i]["hp"]:
+                sc = best[j][0] + w(rows[i])
+                if sc > best[i][0]:
+                    best[i] = (sc, j)
+    i = max(range(n), key=lambda k: best[k][0])
+    keep = []
+    while i >= 0:
+        keep.append(i)
+        i = best[i][1]
+    keep = sorted(keep)
+    return [rows[k] for k in keep], n - len(keep)
 
 
 def tesseract_conf(img, psm="7", lang="eng", whitelist=None):
@@ -487,12 +535,20 @@ def trait_anchors(crop_img):
             cands.append([y + h / 2.0, int(x), int(w), int(h), d, c])
     if not cands:
         return []
-    xs = sorted(c[1] for c in cands)
-    # cột số đếm: vị trí x xuất hiện nhiều nhất (các chữ số đếm thẳng hàng)
-    col = max(xs, key=lambda x0: sum(1 for x in xs if abs(x - x0) <= 4))
+    # Cột số đếm = cột chữ số TO nằm TRÁI nhất. (Chữ số mốc '1 / 2' nhỏ hơn; chữ cái đầu tên tộc/hệ
+    # nằm bên phải — không được chọn theo "cột đông nhất" vì đầu trận nhiều dòng mức 1 làm cột mốc đông hơn.)
+    # chiều cao tham chiếu: chiều cao lớn nhất mà ít nhất 2 chữ số cùng có (bỏ 1 mảnh icon / khung lẻ cao bất thường)
+    hs = [c[3] for c in cands]
+    max_h = max((h for h in hs if sum(1 for o in hs if abs(o - h) <= 1) >= 2), default=max(hs))
+    tall = [c for c in cands if 0.85 * max_h <= c[3] <= 1.2 * max_h and c[2] >= 0.4 * c[3]]
+    if not tall:
+        return []
+    need = min(2, len(tall))
+    col = min((c[1] for c in tall if sum(1 for o in tall if abs(o[1] - c[1]) <= 4) >= need),
+              default=min(c[1] for c in tall))
     rows = []
     for c in sorted(cands, key=lambda c: c[0]):
-        if abs(c[1] - col) > 5:
+        if abs(c[1] - col) > 5 or not (0.85 * max_h <= c[3] <= 1.2 * max_h):
             continue
         # chữ số thứ 2 ngay bên phải (vd. 10, 12)
         for c2 in cands:

@@ -520,12 +520,12 @@ class SettingsDialog:
         top = self.top = tk.Toplevel(root)
         top.title("Cài đặt DTCLScan")
         top.transient(root)
-        center(top, 560, 330)
+        center(top, 560, 290)
         f = ttk.Frame(top, padding=14)
         f.pack(fill="both", expand=True)
         self.vars = {}
-        rows = [("player_name", "Tên trong game của bạn", "để tìm đúng dòng máu của bạn ở bảng bên phải"),
-                ("ocr_lang", "Ngôn ngữ OCR", "auto (eng+vie nếu có) · eng · eng+vie"),
+        # "Tên trong game" đã bỏ: dòng máu của bạn được nhận ra nhờ số máu TO (không cần tên)
+        rows = [("ocr_lang", "Ngôn ngữ OCR", "auto (eng+vie nếu có) · eng · eng+vie"),
                 ("api_key", "Claude API key", "chỉ cần khi dùng AI · lấy ở console.anthropic.com"),
                 ("model", "Model AI", "vd. claude-sonnet-5-5 (cân bằng) · claude-haiku-5-5 (rẻ hơn)")]
         for i, (k, label, hint) in enumerate(rows):
@@ -541,7 +541,7 @@ class SettingsDialog:
         b.grid(row=10, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(b, text="Lưu", command=self.save).pack(side="right")
         ttk.Button(b, text="Huỷ", command=top.destroy).pack(side="right", padx=6)
-        fit(top, 560, 330)
+        fit(top, 560, 290)
 
     def save(self):
         core.set_settings(**{k: v.get().strip() for k, v in self.vars.items()})
@@ -555,7 +555,9 @@ def panel_text(key, crop, lang):
         return ", ".join(f"{t['trait']} {t['count'] or '?'}" for t in tr) or ""
     pl, st = ocr.read_players(crop, lang)
     txt = ", ".join(("BẠN " if p["me"] else "") + str(p["hp"]) for p in pl)
-    if st != "ok":
+    if st == "uncertain":
+        txt += "  (có dòng đọc sai thứ tự máu giảm dần nên đã bỏ — nên khoanh lại cho sát cột số máu)"
+    elif st != "ok":
         txt += "  (ít dòng đọc được — bảng có thể đang hiện thống kê sát thương, hoặc vùng khoanh chưa đúng)"
     return txt
 
@@ -587,6 +589,10 @@ class CalibrateWindow:
         self.lst = tk.Listbox(left, width=40, height=len(layout.FIELDS), activestyle="none", exportselection=False,
                               font=("Segoe UI", 10))
         self.lst.pack(fill="x")
+        # kết quả "Thử đọc" dài (tộc/hệ, cột máu) → cuộn ngang; chọn mục để xem đầy đủ ở ô bên dưới
+        xs = ttk.Scrollbar(left, orient="horizontal", command=self.lst.xview)
+        xs.pack(fill="x")
+        self.lst.config(xscrollcommand=xs.set)
         self.keys = list(layout.FIELDS)
         self.lst.bind("<<ListboxSelect>>", self.on_select)
         self.desc = ttk.Label(left, text="", style="Hint.TLabel", wraplength=300)

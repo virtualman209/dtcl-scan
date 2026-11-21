@@ -36,6 +36,15 @@ def _check_fake(res):
     assert html.startswith("<!DOCTYPE html>") and html.rstrip().endswith("</html>")
     assert "Phân tích trận ĐTCL" in html
     m = res["match"]
+    # vàng cuối / XP / cấp của TỪNG vòng (lỗi vòng 1: lấy nhầm số đầu vòng sau)
+    got = {r["round"]: r for r in m["rounds"]}
+    bad = []
+    for want in res["truth"]["round_end"]:
+        r = got.get(want["round"])
+        if r is None or (r["gold_end"], r["xp"], r["level"]) != (want["gold_end"], want["xp"], want["level"]):
+            bad.append((want, r and (r["gold_end"], r["xp"], r["level"])))
+    assert not bad, bad
+    assert [r["round"] for r in m["rounds"]] == res["truth"]["rounds"]
     assert m["summary"]["last_round"] == "4-1"
     assert m["summary"]["final_level"] == res["truth"]["final_level"]
 
@@ -103,3 +112,18 @@ def test_cli_runs(real_video):
     assert rep.endswith("report.html") and os.path.isfile(rep)
     with open(os.path.join(os.path.dirname(rep), "match.json"), encoding="utf-8") as f:
         assert json.load(f)["fps"] == 1
+
+
+def test_low_res_hp_not_claimed(workdir):
+    """Video 720p nén mạnh dựng từ khung thật: máu người khác không được báo "ok" với số sai (lỗi 3 vòng 1)."""
+    from conftest import REAL, run_analysis_quiet
+    src = os.path.join(workdir, "thật 720p.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-loop", "1", "-t", "20", "-framerate", "10", "-i", os.path.join(REAL, "hud_3-5_a.png"),
+                    "-vf", "scale=1280:720", "-c:v", "libx264", "-crf", "28", "-pix_fmt", "yuv420p", src], check=True)
+    res = run_analysis_quiet(src, chat_pack=False)
+    r = [x for x in res["match"]["rounds"] if x["round"] == "3-5"][0]
+    assert r["hp"] == 87
+    assert r["players_panel"] != "ok"
+    assert r.get("rank_hp") is None
+    assert r["hp_others"] == []

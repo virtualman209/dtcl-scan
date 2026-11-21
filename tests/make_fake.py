@@ -3,7 +3,7 @@
     python tests/make_fake.py OUT.mp4 [--height 1080] [--crf 23] [--fps 10]
 
 Ghi kèm OUT.truth.json: danh sách 10 hành động (4 mua XP, 3 roll, 3 mua tướng) theo vòng,
-vàng / cấp cuối trận. Video dài 10 vòng x 20 giây = 3:20.
+vàng / XP / cấp ở cuối mỗi vòng (round_end) và cuối trận. Video dài 10 vòng x 20 giây = 3:20.
 """
 import argparse
 import json
@@ -47,7 +47,7 @@ def make(out, height=1080, crf=23, fps=10, seed=1):
 
     gold, level, xp, need = 0, 3, 0, 6
     base = np.random.default_rng(0).integers(10, 45, (H, W, 3)).astype(np.uint8)
-    actions = []
+    actions, round_end = [], []
     for r in ROUNDS:
         gold += 5 + min(5, gold // 10)
         xp += 2
@@ -88,11 +88,12 @@ def make(out, height=1080, crf=23, fps=10, seed=1):
                 if n:
                     put(img, f"shop{i + 1}", n, 0.85)
             proc.stdin.write(img.tobytes())
+        round_end.append({"round": r, "gold_end": gold, "xp": f"{xp}/{need}", "level": level})
     proc.stdin.close()
     proc.wait()
     if proc.returncode:
         raise RuntimeError("ffmpeg lỗi khi tạo video giả")
-    truth = {"actions": actions, "final_gold": gold, "final_level": level, "rounds": ROUNDS,
+    truth = {"actions": actions, "round_end": round_end, "final_gold": gold, "final_level": level, "rounds": ROUNDS,
              "duration": len(ROUNDS) * ROUND_SEC}
     with open(os.path.splitext(out)[0] + ".truth.json", "w", encoding="utf-8") as f:
         json.dump(truth, f, ensure_ascii=False, indent=1)
