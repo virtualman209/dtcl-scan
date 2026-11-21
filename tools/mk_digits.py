@@ -1,5 +1,5 @@
 """Sinh mẫu chữ số 0-9 từ vài font sans đậm → digits.npz (ship kèm tool)."""
-import cv2, numpy as np
+import os, cv2, numpy as np
 from PIL import Image, ImageDraw, ImageFont
 FONTS=["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf","/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
        "/usr/share/fonts/truetype/google-fonts/ofl/firasans/FiraSans-SemiBold.ttf","/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
@@ -26,5 +26,5 @@ if __name__=="__main__":
                 _,b=cv2.threshold(b,110,255,cv2.THRESH_BINARY)
                 g=norm_glyph(b)
                 if g is not None: T.append(g); L.append(int(d))
-    np.savez_compressed("/home/claude/DTCLScan/digits.npz",t=np.array(T,np.float32),l=np.array(L))
+    np.savez_compressed(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "digits.npz"),t=np.array(T,np.float32),l=np.array(L))
     print(len(T),"templates")

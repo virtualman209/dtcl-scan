@@ -9,6 +9,7 @@ Cách gọi:
 import base64
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -23,7 +24,7 @@ import tkinter as tk  # noqa: E402
 from tkinter import ttk, filedialog, messagebox, simpledialog  # noqa: E402
 
 APP = "DTCLScan"
-LOG = os.path.join(os.environ.get("TEMP", "/tmp"), "dtclscan.log")
+LOG = os.path.join(os.environ.get("TEMP") or __import__("tempfile").gettempdir(), "dtclscan.log")
 PORT = 47873
 
 
@@ -78,6 +79,41 @@ def gather_paths(mode, paths):
     return out
 
 
+# ============================================================ gọi giao diện từ luồng phụ
+# Tkinter không an toàn khi gọi từ luồng khác: luồng phụ chỉ bỏ việc vào hàng đợi,
+# luồng giao diện lấy ra chạy mỗi 40ms.
+_UIQ = queue.Queue()
+
+
+def ui_call(fn, delay_ms=0):
+    _UIQ.put((time.time() + delay_ms / 1000.0, fn))
+
+
+def start_ui_pump(root):
+    pending = []
+
+    def poll():
+        try:
+            while True:
+                pending.append(_UIQ.get_nowait())
+        except queue.Empty:
+            pass
+        now = time.time()
+        for item in [p for p in pending if p[0] <= now]:
+            pending.remove(item)
+            try:
+                item[1]()
+            except tk.TclError:
+                pass                     # cửa sổ đã đóng
+            except Exception:  # noqa: BLE001
+                root.report_callback_exception(*sys.exc_info())
+        try:
+            root.after(40, poll)
+        except tk.TclError:
+            pass
+    poll()
+
+
 # ============================================================ tiện ích giao diện
 def setup_style(root):
     style = ttk.Style(root)
@@ -90,9 +126,42 @@ def setup_style(root):
 
 def center(win, w, h):
     win.update_idletasks()
-    x = (win.winfo_screenwidth() - w) // 2
-    y = max(0, (win.winfo_screenheight() - h) // 3)
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    w, h = min(w, sw), min(h, sh - 40)
+    x = max(0, (sw - w) // 2)
+    y = max(0, min((sh - h) // 3, sh - 40 - h))
     win.geometry(f"{w}x{h}+{x}+{y}")
+
+
+def fit(win, w, h):
+    """Đặt cỡ cửa sổ đủ chứa toàn bộ nội dung (font trên máy người dùng có thể to hơn dự tính), không quá màn hình."""
+    win.update_idletasks()
+    center(win, max(w, win.winfo_reqwidth()), max(h, win.winfo_reqheight()))
+
+
+def write_log(text):
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + text + "\n")
+    except OSError:
+        pass
+
+
+def st_bool(key):
+    v = core.get_settings().get(key, True)
+    return v if isinstance(v, bool) else str(v).strip().lower() not in ("0", "false", "no", "")
+
+
+def open_file(path):
+    """Mở file bằng trình duyệt / chương trình mặc định (đường dẫn có dấu, khoảng trắng vẫn được)."""
+    import pathlib
+    try:
+        if os.name == "nt":
+            os.startfile(os.path.abspath(path))       # noqa: S606
+        else:
+            webbrowser.open(pathlib.Path(os.path.abspath(path)).as_uri())
+    except Exception:  # noqa: BLE001
+        webbrowser.open(pathlib.Path(os.path.abspath(path)).as_uri())
 
 
 def reveal(path):
@@ -290,6 +359,7 @@ class HomeWindow:
         root._on_drop = self.drop
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.prof_hint()
+        fit(root, 760, 700)
 
     # ----------------------------------------------------------- tiện ích
     def prof_hint(self):
@@ -339,7 +409,13 @@ class HomeWindow:
             return
         if f not in self.files:
             self.drop([f])
-        CalibrateWindow(self.root, f, self.profile.get(), on_saved=self.profile_saved)
+        try:
+            CalibrateWindow(self.root, f, self.profile.get(), on_saved=self.profile_saved)
+        except core.VideoError as e:
+            messagebox.showerror(APP, str(e), parent=self.root)
+        except Exception as e:  # noqa: BLE001
+            write_log(traceback.format_exc())
+            messagebox.showerror(APP, f"Không mở được cửa sổ Căn chỉnh vùng:\n{e}", parent=self.root)
 
     def profile_saved(self, name):
         self.cb_prof.config(values=self.layout.list_profiles())
@@ -377,48 +453,55 @@ class HomeWindow:
         t_start = time.time()
 
         def log(s):
-            self.root.after(0, lambda: self.write(s))
+            ui_call(lambda: self.write(s))
 
         def work():
             import analyze
-            reports, err = [], None
+            reports, err, errors = [], None, []
             for k, f in enumerate(files):
                 def prog(p, k=k):
                     tot = (k + p) / len(files)
                     el = time.time() - t_start
                     eta = f" ~{int(el / tot - el)}s" if tot > 0.03 else ""
-                    self.root.after(0, lambda: (self.pvar.set(tot * 100), self.plabel.config(text=f"{tot * 100:3.0f}%{eta}")))
+                    ui_call(lambda: (self.pvar.set(tot * 100), self.plabel.config(text=f"{tot * 100:3.0f}%{eta}")))
                 log(f"─── {os.path.basename(f)}")
                 try:
                     reports.append(analyze.run_analysis(f, opts, prog, log, lambda: self._cancel))
                 except core.Cancelled:
                     err = "cancel"
+                    log("Đã huỷ.")
                     break
                 except Exception as e:  # noqa: BLE001
-                    log("LỖI: " + str(e))
-                    with open(LOG, "a", encoding="utf-8") as fh:
-                        fh.write(traceback.format_exc())
-                    err = str(e)
-            self.root.after(0, lambda: self.done(reports, err))
+                    msg = analyze.friendly_error(e)
+                    log("LỖI: " + msg)
+                    write_log(traceback.format_exc())
+                    errors.append(f"{os.path.basename(f)}: {msg}")
+            ui_call(lambda: self.done(reports, err, errors))
         threading.Thread(target=work, daemon=True).start()
 
-    def done(self, reports, err):
+    def done(self, reports, err, errors=()):
         self._busy = False
+        self._cancel = False
         self.btn.config(text="▶  Phân tích")
         if err == "cancel":
             self.plabel.config(text="Đã huỷ")
+            self.pvar.set(0)
             return
-        if err and not reports:
+        if errors and not reports:
             self.plabel.config(text="Lỗi!")
-            messagebox.showerror(APP, err, parent=self.root)
+            messagebox.showerror(APP, "\n\n".join(errors), parent=self.root)
             return
-        self.plabel.config(text="Xong")
+        self.plabel.config(text="Xong" if not errors else "Xong (có lỗi)")
         self.pvar.set(100)
+        if errors:
+            messagebox.showwarning(APP, f"{len(errors)} video bị lỗi:\n\n" + "\n\n".join(errors), parent=self.root)
+        if not st_bool("ask_open"):
+            return
         if reports and messagebox.askyesno(APP, f"Đã phân tích {len(reports)} video.\n\nMở báo cáo?\n\n"
                                                 "Muốn Claude nhận xét: mở thư mục gui_claude, kéo các ảnh + "
                                                 "nội dung cau_hoi.txt vào claude.ai.", parent=self.root):
             for r in reports:
-                webbrowser.open("file:///" + os.path.abspath(r).replace("\\", "/"))
+                open_file(r)
                 pack = os.path.join(os.path.dirname(r), "gui_claude", "cau_hoi.txt")
                 if os.path.isfile(pack):
                     reveal(pack)
@@ -458,6 +541,7 @@ class SettingsDialog:
         b.grid(row=10, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(b, text="Lưu", command=self.save).pack(side="right")
         ttk.Button(b, text="Huỷ", command=top.destroy).pack(side="right", padx=6)
+        fit(top, 560, 330)
 
     def save(self):
         core.set_settings(**{k: v.get().strip() for k, v in self.vars.items()})
@@ -492,9 +576,10 @@ class CalibrateWindow:
         top = self.top = tk.Toplevel(root)
         top.title(f"Căn chỉnh vùng HUD — {os.path.basename(video)}  [profile: {self.prof['name']}]")
         sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
-        self.CW = max(640, min(1200, sw - 380, int((sh - 170) * 16 / 9)))     # vừa màn hình laptop
+        self.CW = max(560, min(1200, sw - 400, int((sh - 190) * 16 / 9)))     # vừa màn hình laptop
         self.CH = int(self.CW * 9 / 16)
-        center(top, self.CW + 360, self.CH + 90)
+        self.ZH = 140 if sh >= 900 else 70           # ô phóng to nhỏ lại trên màn hình laptop 768px
+        center(top, self.CW + 360, min(sh - 60, max(self.CH + 90, 640)))
 
         left = ttk.Frame(top, padding=8)
         left.pack(side="left", fill="y")
@@ -510,19 +595,28 @@ class CalibrateWindow:
                   style="Hint.TLabel").pack(anchor="w")
         ttk.Label(left, text="Vùng đang chọn (phóng to) và ảnh sau xử lý:", style="Hint.TLabel").pack(anchor="w",
                                                                                                     pady=(10, 2))
-        self.zoom = tk.Label(left, bg="#222", width=300, height=90)
+        zh = self.ZH
+        self._blank = tk.PhotoImage(width=1, height=1)       # có ảnh → width/height tính bằng pixel
+        self.zoom = tk.Label(left, bg="#222", image=self._blank, width=300, height=zh)
         self.zoom.pack(fill="x")
-        self.zoom2 = tk.Label(left, bg="#fff", width=300, height=90)
+        self.zoom2 = tk.Label(left, bg="#fff", image=self._blank, width=300, height=zh)
         self.zoom2.pack(fill="x", pady=(2, 0))
-        self.ocr_lbl = ttk.Label(left, text="", wraplength=300, font=("Consolas", 10))
-        self.ocr_lbl.pack(anchor="w", pady=4)
-        ttk.Button(left, text="Thử đọc tất cả vùng (OCR)", command=self.test_all).pack(fill="x", pady=(8, 2))
-        ttk.Button(left, text="Lưu", command=self.save).pack(fill="x", pady=2)
-        ttk.Button(left, text="Lưu thành profile mới…", command=self.save_as).pack(fill="x", pady=2)
-        ttk.Button(left, text="Khôi phục toạ độ mặc định", command=self.reset).pack(fill="x", pady=2)
-        ttk.Label(left, text="Mẹo: chọn thời điểm đang ở giai đoạn chuẩn bị (có cửa hàng, có số vàng) để căn. "
-                             "Mỗi độ phân giải / tỉ lệ màn hình nên có 1 profile riêng.",
-                  style="Hint.TLabel", wraplength=300).pack(anchor="w", pady=(10, 0))
+        self.ocr_lbl = tk.Label(left, text="", wraplength=330, font=("Consolas", 9), height=3, anchor="nw",
+                                justify="left")
+        self.ocr_lbl.pack(anchor="w", fill="x", pady=2)
+        ttk.Button(left, text="Thử đọc tất cả vùng (OCR)", command=self.test_all).pack(fill="x", pady=(6, 2))
+        btns = ttk.Frame(left)
+        btns.pack(fill="x")
+        btns.columnconfigure(0, weight=1)
+        btns.columnconfigure(1, weight=1)
+        ttk.Button(btns, text="Lưu", command=self.save).grid(row=0, column=0, sticky="we", padx=(0, 2), pady=2)
+        ttk.Button(btns, text="Lưu thành profile mới…", command=self.save_as).grid(row=0, column=1, sticky="we",
+                                                                                pady=2)
+        ttk.Button(btns, text="Khôi phục toạ độ mặc định", command=self.reset).grid(row=1, column=0, columnspan=2,
+                                                                                  sticky="we", pady=2)
+        ttk.Label(left, text="Mẹo: căn lúc đang chuẩn bị (thấy cửa hàng, số vàng). "
+                             "Mỗi độ phân giải nên có 1 profile riêng.",
+                  style="Hint.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
 
         right = ttk.Frame(top, padding=8)
         right.pack(side="left", fill="both", expand=True)
@@ -549,6 +643,7 @@ class CalibrateWindow:
         self.refresh_list()
         self.lst.selection_set(0)
         self.on_select()
+        fit(top, self.CW + 360, self.CH + 90)
         self.load_frame()
 
     # ----------------------------------------------------------- khung hình
@@ -562,18 +657,25 @@ class CalibrateWindow:
 
         def work():
             fr = core.grab_frame(self.info, t)
-            self.top.after(0, lambda: self.show_frame(fr, t))
+            ui_call(lambda: self.show_frame(fr, t))
         threading.Thread(target=work, daemon=True).start()
 
     def show_frame(self, fr, t):
         self.tlbl.config(text=core.fmt_time(t))
         if fr is None:
+            if self.frame is None:
+                self.cv.delete("all")
+                self.cv.create_text(self.CW // 2, self.CH // 2, fill="#ddd", font=("Segoe UI", 12),
+                                    text="Không lấy được khung hình ở thời điểm này — hãy kéo thanh thời gian.")
             return
+        first = self.frame is None
         self.frame = fr
         self.photo, self.scale = to_photo(fr, self.CW, self.CH)
         self.fw, self.fh = fr.shape[1], fr.shape[0]
         self.redraw()
         self.update_zoom()
+        if first:
+            fit(self.top, self.CW + 360, self.CH + 90)     # ảnh phóng to đã có → đo lại cỡ cửa sổ
 
     def redraw(self):
         c = self.cv
@@ -653,15 +755,15 @@ class CalibrateWindow:
             return
         import ocr
         c = self.L.crop(self.frame, self.prof["boxes"][self.sel])
-        self.zphoto, _ = to_photo(c, 300, 140)
-        self.zoom.config(image=self.zphoto, width=300, height=140)
+        self.zphoto, _ = to_photo(c, 300, self.ZH)
+        self.zoom.config(image=self.zphoto, width=300, height=self.ZH)
         kind = ocr.field_kind(self.sel, self.L.FIELDS[self.sel][1])
         b = ocr.prep(c, {"traits": "panelw", "players": "panel"}.get(self.sel, kind),
                      scale=3.0 if self.sel in ("traits", "players") else None)
         if b is not None:
             import cv2
-            self.zphoto2, _ = to_photo(cv2.cvtColor(b, cv2.COLOR_GRAY2BGR), 300, 140)
-            self.zoom2.config(image=self.zphoto2, width=300, height=140)
+            self.zphoto2, _ = to_photo(cv2.cvtColor(b, cv2.COLOR_GRAY2BGR), 300, self.ZH)
+            self.zoom2.config(image=self.zphoto2, width=300, height=self.ZH)
         self.ocr_lbl.config(text="đang đọc…")
         frame, sel = self.frame, self.sel
         lang = core.get_settings().get("ocr_lang", "auto")
@@ -676,7 +778,7 @@ class CalibrateWindow:
                     txt = f"đọc thô: {raw!r}\n→ hiểu là: {val!r}"
             except Exception as ex:  # noqa: BLE001
                 txt = f"lỗi OCR: {ex}"
-            self.top.after(0, lambda: self.ocr_lbl.config(text=txt) if self.sel == sel else None)
+            ui_call(lambda: self.ocr_lbl.config(text=txt) if self.sel == sel else None)
         threading.Thread(target=work, daemon=True).start()
 
     def test_all(self):
@@ -700,7 +802,7 @@ class CalibrateWindow:
                 if isinstance(v, list):
                     v = " | ".join(v[:6])
                 res[k] = v
-            self.top.after(0, lambda: self.show_results(res))
+            ui_call(lambda: self.show_results(res))
         self.lst.delete(0, "end")
         self.lst.insert("end", "  đang đọc…")
         threading.Thread(target=work, daemon=True).start()
@@ -759,7 +861,7 @@ def auto_update_check(root, get_busy=lambda: False):
         except Exception:
             return
         if r:
-            root.after(1500, lambda: prompt(r))
+            ui_call(lambda: prompt(r), 1500)
 
     def prompt(r):
         if get_busy():
@@ -792,7 +894,7 @@ def do_update(root, then_quit=False):
             messagebox.showerror(APP, msg[1], parent=root)
         if then_quit:
             root.destroy()
-    root.after(0, show)
+    ui_call(show)
 
 
 def manual_update(root, keep=False):
@@ -829,6 +931,15 @@ def main():
 
     root = tk.Tk()
     setup_style(root)
+
+    def on_tk_error(exc, val, tb):
+        write_log("".join(traceback.format_exception(exc, val, tb)))
+        try:
+            messagebox.showerror(APP, f"Có lỗi xảy ra:\n{val}\n\nChi tiết đã ghi vào:\n{LOG}", parent=root)
+        except Exception:
+            pass
+    root.report_callback_exception = on_tk_error
+    start_ui_pump(root)
     try:
         root.iconbitmap(default=os.path.join(core.APP_DIR, "dtclscan.ico"))
     except Exception:
@@ -860,10 +971,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(traceback.format_exc())
+    except Exception as _e:  # noqa: BLE001
+        write_log(traceback.format_exc())
         try:
-            messagebox.showerror(APP, traceback.format_exc())
+            messagebox.showerror(APP, f"DTCLScan gặp lỗi và phải đóng:\n{_e}\n\nChi tiết đã ghi vào:\n{LOG}")
         except Exception:
             pass

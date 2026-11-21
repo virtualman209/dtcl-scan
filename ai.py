@@ -6,9 +6,12 @@ Mỗi ảnh là 1 lượt gọi API (tính phí theo tài khoản Anthropic củ
 import base64
 import json
 import re
+import urllib.error
 import urllib.request
 
 import cv2
+
+import core
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -44,12 +47,14 @@ def _call(content, opts, max_tokens=1500):
         with urllib.request.urlopen(req, timeout=120) as r:
             data = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from None
+        raise RuntimeError(f"Claude API trả lỗi HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"Không kết nối được Claude API (kiểm tra mạng): {e}") from None
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
 
 def _jpeg_b64(path, max_w=1568):
-    img = cv2.imread(path)
+    img = core.imread(path)
     if img is None:
         raise RuntimeError("Không mở được ảnh " + path)
     if img.shape[1] > max_w:

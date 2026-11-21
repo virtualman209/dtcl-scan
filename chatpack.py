@@ -5,6 +5,8 @@ import os
 import cv2
 import numpy as np
 
+import core
+
 PROMPT = """Mình là người chơi Đấu Trường Chân Lý (TFT) còn yếu. Dưới đây là dữ liệu 1 trận mình chơi, \
 được trích tự động từ video (OCR, có thể sai vài chỗ). Các ảnh đính kèm là ảnh chụp giai đoạn chuẩn bị \
 của từng vòng (mỗi ảnh ghép 4 vòng, có ghi số vòng ở góc).
@@ -46,7 +48,7 @@ def write(out_dir, rounds, summary, per_image=4, cell_w=960):
     for i in range(0, len(shots), per_image):
         cells = []
         for r in shots[i:i + per_image]:
-            img = cv2.imread(os.path.join(out_dir, r["keyframe"]))
+            img = core.imread(os.path.join(out_dir, r["keyframe"]))
             if img is None:
                 continue
             img = cv2.resize(img, (cell_w, int(img.shape[0] * cell_w / img.shape[1])), interpolation=cv2.INTER_AREA)
@@ -62,7 +64,7 @@ def write(out_dir, rounds, summary, per_image=4, cell_w=960):
         rows = [np.hstack([c if c.shape[0] == h else cv2.resize(c, (cell_w, h)) for c in cells[k:k + cols]])
                 for k in range(0, len(cells), cols)]
         n_img += 1
-        cv2.imwrite(os.path.join(pack, f"anh_{n_img:02d}.jpg"), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        core.imwrite(os.path.join(pack, f"anh_{n_img:02d}.jpg"), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 88])
     s = summary or {}
     summ = (f"vòng cuối {s.get('last_round')}, cấp cuối {s.get('final_level')}, "
             f"lên cấp: {', '.join(f'{k[2:]}@{v}' for k, v in (s.get('level_timing') or {}).items()) or '?'}, "

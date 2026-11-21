@@ -65,6 +65,24 @@ Có thể điền tên tướng của mùa hiện tại vào `champions.txt` đ�
 python analyze.py video.mp4 --profile default_1080p --fps 2 --from 0 --to 0
 ```
 
+Nếu video hỏng, không phải video hoặc dài 0 giây, tool báo lỗi tiếng Việt (mã thoát 1) thay vì dừng đột ngột.
+Chạy lại trên cùng video sẽ ghi đè kết quả cũ trong `<tên video>_dtcl\`.
+
+## Kiểm thử (cho người phát triển)
+
+Cần Python 3 + numpy + opencv + pytest, ffmpeg, Tesseract (`eng` + `vie`); test giao diện cần thêm Xvfb + tkinter.
+
+```
+python -m pytest -q tests
+```
+
+- `tests/test_ocr_real.py`: OCR trên 3 khung HUD thật (`tests/fixtures/real`, đáp án `truth.json`).
+- `tests/test_pipeline.py`: chạy đầu cuối trên video giả lập (`tests/make_fake.py`) và video dựng từ khung thật.
+- `tests/test_errors.py`, `tests/test_install.py`: đường dẫn có dấu, video hỏng, huỷ, cài đặt / cập nhật.
+- `tests/gui_shots.py`: mở giao diện dưới Xvfb, chụp màn hình vào `_review/x_shots/`.
+
+Tạo video giả: `python tests/make_fake.py "thử.mp4" --height 720 --crf 35` (kèm file đáp án `thử.truth.json`).
+
 ## Phát hành bản mới
 
 Sửa code → tăng số phiên bản ở dòng đầu `version.txt` (các dòng sau là ghi chú thay đổi) → push lên `main`.

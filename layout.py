@@ -52,10 +52,16 @@ DEFAULT = {"name": "default_1080p", "calibrated": False, "aspect": "16:9", "boxe
 
 
 def list_profiles():
-    os.makedirs(core.PROFILE_DIR, exist_ok=True)
-    names = sorted(f[:-5] for f in os.listdir(core.PROFILE_DIR) if f.endswith(".json"))
+    try:
+        os.makedirs(core.PROFILE_DIR, exist_ok=True)
+        names = sorted(f[:-5] for f in os.listdir(core.PROFILE_DIR) if f.endswith(".json"))
+    except OSError:
+        names = []
     if DEFAULT["name"] not in names:
-        save(DEFAULT)
+        try:
+            save(DEFAULT)
+        except OSError:
+            pass                        # thư mục không ghi được → vẫn dùng toạ độ mặc định trong bộ nhớ
         names.insert(0, DEFAULT["name"])
     return names
 

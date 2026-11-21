@@ -36,24 +36,27 @@ def round_key(r):
 
 
 # ============================================================ 1. đọc video
-def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end=None):
+def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end=None, errors=None):
     boxes = prof["boxes"]
     workers = max(2, min(12, (os.cpu_count() or 4)))
     pool = ThreadPoolExecutor(workers)
-    last_small, entries, outstanding = {}, [], []
+    last_small, recheck, entries, outstanding = {}, {}, [], []
     end_t = end or info["duration"]
     span = max(1.0, end_t - start)
     t_last_log = 0
     try:
-        for t, frame in core.iter_frames(info, fps, cancel, start, end):
+        for t, frame in core.iter_frames(info, fps, cancel, start, end, errors):
             e = {"t": round(t, 2)}
             for key in layout.SAMPLE_FIELDS:
                 c = layout.crop(frame, boxes[key])
                 small = cv2.resize(c.max(axis=2), (48, 12), interpolation=cv2.INTER_AREA).astype(np.int16)
                 prev = last_small.get(key)
-                if prev is not None and np.abs(small - prev).mean() < 2.0:
+                if prev is not None and np.abs(small - prev).mean() < 2.0 and not recheck.get(key):
                     e[key] = SAME
                     continue
+                # vừa đổi → khung sau đọc lại 1 lần nữa dù trông giống (khung chuyển cảnh / nén có thể đọc sai,
+                # nếu không đọc lại thì giá trị sai bị giữ suốt tới lần đổi sau)
+                recheck[key] = prev is None or np.abs(small - prev).mean() >= 2.0
                 last_small[key] = small
                 ftype = layout.FIELDS[key][1]
                 fut = pool.submit(ocr.read_field, c.copy(), key, ftype, lang)
@@ -104,7 +107,18 @@ def snap_shop_names(samples, fps):
     known_n = {ocr.norm(k): k for k in known}
     cnt = Counter(s[k] for s in samples for k in layout.SHOP if s.get(k))
     vocab = [n for n, c in cnt.items() if c >= max(3, fps * 2)]
-    vocab_n = {ocr.norm(v): v for v in vocab}
+    # tên đọc sai nhưng lặp lại vài lần (vd 'Maiphite' 6 lần cạnh 'Malphite' 120 lần) → gộp về tên phổ biến
+    ncnt = Counter()
+    for n, c in cnt.items():
+        ncnt[ocr.norm(n)] += c
+    vocab_n = {}
+    for v in sorted(vocab, key=lambda v: -cnt[v]):
+        nv = ocr.norm(v)
+        if nv in vocab_n:
+            continue
+        m = [k for k in difflib.get_close_matches(nv, list(vocab_n), 3, 0.75) if ncnt[k] >= 4 * ncnt[nv]]
+        if not m:
+            vocab_n[nv] = v
     cache = {}
 
     def snap(name):
@@ -117,7 +131,9 @@ def snap_shop_names(samples, fps):
         if known_n:
             m = difflib.get_close_matches(n, list(known_n), 1, 0.6)
             res = known_n[m[0]] if m else name
-        elif n not in vocab_n:
+        elif n in vocab_n:
+            res = vocab_n[n]                   # cùng tên, khác hoa/thường hoặc dấu → 1 cách viết
+        else:
             m = difflib.get_close_matches(n, list(vocab_n), 1, 0.75)
             res = vocab_n[m[0]] if m else name
         cache[name] = res
@@ -310,27 +326,63 @@ def summarize_rounds(samples, S, events, duration):
 def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cancel):
     kdir = os.path.join(out_dir, "keyframes")
     os.makedirs(kdir, exist_ok=True)
+    for f in os.listdir(kdir):                     # chạy lại → xoá ảnh chốt của lần trước
+        if f.lower().endswith(".jpg"):
+            try:
+                os.remove(os.path.join(kdir, f))
+            except OSError:
+                pass
     for idx, r in enumerate(rounds):
         if cancel and cancel():
             raise core.Cancelled()
         t = r["start"] + min(24.0, max(1.0, r["duration"] * 0.6))
-        frame = core.grab_frame(info, t)
+        # 1 lần gọi ffmpeg lấy vài khung quanh t (cách nhau 2 giây): khung gần t nhất làm ảnh chốt,
+        # các khung còn lại để bỏ phiếu số máu (video nén làm chữ số nhỏ nhoè)
+        t0 = max(r["start"], t - 4.0)
+        t1 = max(t0 + 0.1, min(t + 4.1, r["end"] - 0.3, info["duration"] or t + 4.1))
+        near = [(tt, f) for tt, f in core.iter_frames(info, 0.5, cancel, t0, t1)]
+        if near:
+            t, frame = min(near, key=lambda x: abs(x[0] - t))
+            extra = [f for tt, f in near if f is not frame]
+        else:
+            frame, extra = core.grab_frame(info, t), []
         if frame is None:
             continue
         name = f"{idx + 1:02d}_vong_{r['round']}.jpg"
-        cv2.imwrite(os.path.join(kdir, name), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        core.imwrite(os.path.join(kdir, name), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         r["keyframe"] = "keyframes/" + name
         r["keyframe_t"] = round(t, 1)
         r["traits_raw"] = ocr.read_traits(layout.crop(frame, prof["boxes"]["traits"]), lang)
         r["traits"] = ocr.parse_traits(r["traits_raw"])
-        r["players"], r["players_panel"] = ocr.read_players(layout.crop(frame, prof["boxes"]["players"]),
-                                                            lang, player_name)
+        r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name)
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
         r["hp_others"] = [p["hp"] for p in r["players"] if not p["me"]]
         if r["hp"] is not None and r["players_panel"] == "ok":
             r["rank_hp"] = 1 + sum(1 for h in r["hp_others"] if h > r["hp"])   # hạng theo máu (ước lượng)
         on_progress(0.85 + 0.1 * (idx + 1) / max(1, len(rounds)))
+
+
+def read_players_vote(frames, prof, lang, player_name=""):
+    """Đọc cột máu trên vài khung hình, lấy theo đa số từng dòng (hoà → khung đầu tiên)."""
+    reads = [ocr.read_players(layout.crop(f, prof["boxes"]["players"]), lang, player_name) for f in frames]
+    base, status = reads[0]
+    if len(reads) == 1:
+        return base, status
+    oks = [rd for rd in reads if rd[1] == "ok"]
+    if oks:
+        # khung có số dòng phổ biến nhất (ưu tiên khung đầu)
+        n_common = Counter(len(p) for p, _ in oks).most_common(1)[0][0]
+        same = [p for p, _ in oks if len(p) == n_common]
+        base = same[0]
+        status = "ok"
+        voted = []
+        for i, row in enumerate(base):
+            vals = [p[i]["hp"] for p in same if p[i]["me"] == row["me"]]
+            best = max(vals, key=lambda v: (vals.count(v), -vals.index(v)))
+            voted.append(dict(row, hp=best))
+        base = voted
+    return base, status
 
 
 # ============================================================ 6. xuất file
@@ -356,18 +408,37 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
     if miss:
         raise RuntimeError("Thiếu: " + ", ".join(miss) + ". Hãy chạy lại install.bat.")
     prof = layout.load(opts.get("profile") or "default_1080p")
-    fps = float(opts.get("fps") or 2)
+    try:
+        fps = float(opts.get("fps") or 2)
+    except (TypeError, ValueError):
+        fps = 2.0
+    fps = min(10.0, max(0.2, fps))
     lang = opts.get("ocr_lang") or "auto"
+    start, end = float(opts.get("start") or 0), float(opts.get("end") or 0) or None
     info = core.probe(video)
-    out = out_dir_for(video)
+    if info["duration"] and start >= info["duration"]:
+        raise core.VideoError(f"Thời điểm bắt đầu ({core.fmt_time(start)}) nằm sau cuối video "
+                              f"({core.fmt_time(info['duration'])}).")
+    if end is not None and end <= start:
+        raise core.VideoError("Thời điểm 'đến' phải sau thời điểm 'từ'.")
+    try:
+        out = out_dir_for(video)
+    except OSError as e:
+        raise RuntimeError(f"Không tạo được thư mục kết quả cạnh video (thiếu quyền ghi?):\n{e}") from None
     log(f"Video: {os.path.basename(video)}  {info['w']}x{info['h']}  {core.fmt_time(info['duration'])}")
     log(f"Profile: {prof['name']}" + ("" if prof.get("calibrated") else "  (CHƯA căn chỉnh — toạ độ ước lượng)"))
     log(f"Đọc {fps:g} khung/giây…")
 
-    samples = sample_video(info, prof, fps, lang, on_progress, cancel, log,
-                           float(opts.get("start") or 0), float(opts.get("end") or 0) or None)
+    ff_err = []
+    samples = sample_video(info, prof, fps, lang, on_progress, cancel, log, start, end, ff_err)
     if not samples:
-        raise RuntimeError("Không đọc được khung hình nào từ video.")
+        if not info["duration"]:
+            raise core.VideoError(f"Video «{os.path.basename(video)}» dài 0 giây — không có khung hình nào để đọc.")
+        raise core.VideoError(f"Không đọc được khung hình nào từ video «{os.path.basename(video)}» "
+                              "(file hỏng hoặc đoạn thời gian chọn không có hình)."
+                              + (f"\n(chi tiết: {ff_err[-1][:200]})" if ff_err else ""))
+    if ff_err:
+        log("  (ffmpeg báo lỗi khi giải mã — video có thể bị hỏng một phần; vẫn tiếp tục)")
     q = quality(samples)
     log("Tỉ lệ đọc được: " + ", ".join(f"{k} {v}%" for k, v in q.items()))
     S = clean(samples, fps)
@@ -418,8 +489,10 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "read_rate_percent": q, "warnings": warnings,
         "summary": summary(rounds, events), "rounds": rounds, "events": events, "ai_notes": ai_notes,
     }
-    with open(os.path.join(out, "match.json"), "w", encoding="utf-8") as f:
+    tmp = os.path.join(out, "match.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(match, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, os.path.join(out, "match.json"))
     write_csv(os.path.join(out, "samples.csv"), samples,
               ["t", "round", "round_clean", "gold", "gold_clean", "level", "level_clean", "xp", "xp_clean"]
               + layout.SHOP + ["round_raw", "gold_raw", "level_raw", "xp_raw"])
@@ -458,6 +531,23 @@ def summary(rounds, events):
     }
 
 
+def friendly_error(e):
+    """Đổi lỗi kỹ thuật thành 1 câu tiếng Việt dễ hiểu (không traceback)."""
+    if isinstance(e, (core.VideoError,)):
+        return str(e)
+    if isinstance(e, PermissionError):
+        return f"Không có quyền ghi / đọc file: {getattr(e, 'filename', '') or e}\n(File đang mở trong chương trình khác?)"
+    if isinstance(e, OSError) and getattr(e, "errno", None) == 28:
+        return "Ổ đĩa đầy — không ghi được kết quả."
+    if isinstance(e, OSError):
+        return f"Lỗi đọc/ghi file: {e}"
+    if isinstance(e, MemoryError):
+        return "Hết bộ nhớ — hãy đóng bớt chương trình hoặc giảm 'Số khung/giây đọc'."
+    if isinstance(e, RuntimeError) and str(e):
+        return str(e)
+    return f"Lỗi không mong muốn ({type(e).__name__}: {e}). Chi tiết đã ghi vào file log."
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -469,5 +559,24 @@ if __name__ == "__main__":
     ap.add_argument("--to", dest="end", type=float, default=0)
     ap.add_argument("--no-keyframes", action="store_true")
     a = ap.parse_args()
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     o = dict(st, profile=a.profile, fps=a.fps, start=a.start, end=a.end, keyframes=not a.no_keyframes)
-    print(run_analysis(a.video, o))
+    try:
+        print(run_analysis(a.video, o))
+    except (KeyboardInterrupt, core.Cancelled):
+        print("Đã huỷ.", file=sys.stderr)
+        sys.exit(130)
+    except Exception as ex:  # noqa: BLE001
+        import tempfile
+        import traceback
+        try:
+            with open(os.path.join(tempfile.gettempdir(), "dtclscan.log"), "a", encoding="utf-8") as fh:
+                fh.write(traceback.format_exc())
+        except OSError:
+            pass
+        print("LỖI: " + friendly_error(ex), file=sys.stderr)
+        sys.exit(1)

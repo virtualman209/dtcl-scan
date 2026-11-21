@@ -10,3 +10,5 @@ tessdata/
 profiles/*
 !profiles/.keep
 *_dtcl/
+.pytest_cache/
+_review/x_shots/

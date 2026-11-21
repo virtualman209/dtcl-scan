@@ -70,7 +70,9 @@ def drop_edge_blobs(b):
         bar_v = bh >= 0.85 * h and bw <= 0.12 * w
         bar_h = bw >= 0.6 * w and bh <= 0.25 * h
         sliver = (x == 0 or x + bw >= w) and bw <= 0.03 * w
-        if bar_v or bar_h or sliver:
+        # khung chữ U / chữ L (viền ô) chạm mép: trải rộng nhưng rất "rỗng" (nét mảnh)
+        frame = bw >= 0.6 * w and bh >= 0.6 * h and area < 0.2 * bw * bh
+        if bar_v or bar_h or sliver or frame:
             out[lab == i] = 0
     return out if out.any() else b
 
@@ -114,25 +116,39 @@ def tesseract(img, psm="7", whitelist=None, lang="eng"):
     return r.stdout.decode("utf-8", "replace").strip()
 
 
-def read(crop_img, kind, lang="eng", variant=0, scale=None):
-    """Trả về chuỗi đã OCR (thô) của 1 vùng."""
+def has_text(crop_img, lo=120):
+    """Vùng có chữ trắng không (ô cửa hàng trống / HUD đang ẩn → không).
+    Số XP / cấp hiển thị màu xám nhạt hơn tên tướng → dùng ngưỡng thấp hơn (lo=90)."""
+    g = whiteness(crop_img)
+    hi = float(np.percentile(g, 99.5))
+    return hi >= lo and hi - float(np.percentile(g, 20)) >= min(50, lo - 40)
+
+
+_NUM_KINDS = ("round", "int", "level", "xp")
+
+
+def read(crop_img, kind, lang="eng", variant=0, scale=None, with_conf=False):
+    """Trả về chuỗi đã OCR (thô) của 1 vùng (with_conf=True → (chuỗi, độ tin cậy 0..100))."""
+    empty = ("", 0.0) if with_conf else ""
     if crop_img is None or crop_img.size == 0:
-        return ""
-    if kind not in ("block", "panel", "panelw"):
-        g = whiteness(crop_img)
-        if float(np.percentile(g, 99.5)) < 120 or float(np.percentile(g, 99.5)) - float(np.percentile(g, 20)) < 50:
-            return ""                # không có chữ trắng (ô trống) → khỏi OCR, tránh đọc ra rác
+        return empty
+    if kind not in ("block", "panel", "panelw") and not has_text(crop_img, 90 if kind in _NUM_KINDS else 120):
+        return empty                 # không có chữ trắng (ô trống) → khỏi OCR, tránh đọc ra rác
     b = prep(crop_img, kind, variant, scale)
     if b is None:
-        return ""
+        return empty
     psm, wl = _CFG.get(kind, ("7", None))
     lang_used = lang if kind in ("name", "block", "level", "panel", "panelw") else "eng"
+    if with_conf:
+        return tesseract_conf(b, psm, lang_used, wl)
     return tesseract(b, psm, wl, lang_used)
 
 
 # ---------------------------------------------------------------- phân tích chuỗi
 def parse_round(s):
     m = re.search(r"(\d)\s*-\s*(\d)", s or "")
+    if not m:
+        m = re.fullmatch(r"\D*(\d)(\d)\D*", s or "")      # mất dấu gạch: '35' → 3-5
     if not m:
         return None
     st, rd = int(m.group(1)), int(m.group(2))
@@ -156,7 +172,7 @@ def parse_xp(s):
 
 
 def clean_name(s):
-    s = (s or "").strip()
+    s = (s or "").replace("_", " ").strip()
     s = re.sub(r"[^\w\s'’.&-]", "", s, flags=re.UNICODE)
     s = re.sub(r"\d+", "", s)
     s = re.sub(r"\s+", " ", s).strip(" .-'")
@@ -189,26 +205,50 @@ def field_kind(key, ftype):
 
 def read_field(frame_crop, key, ftype, lang="eng"):
     kind = field_kind(key, ftype)
-    raw = read(frame_crop, kind, lang)
-    val = parse(kind, raw)
+    if kind == "name":
+        # tên tướng: đọc 1 lần; nếu Tesseract không chắc (video nén làm chữ dính nét) thì đọc thêm
+        # bằng cách xử lý khác và lấy bản có độ tin cậy cao nhất
+        raw, cf = read(frame_crop, kind, lang, 0, with_conf=True)
+        if raw and cf >= 80:
+            return raw, parse(kind, raw)
+        if not raw and not has_text(frame_crop):
+            return raw, parse(kind, raw)
+        best = (raw, cf if clean_name(raw) else -1.0)
+        for v in (2, 1):
+            r, c = read(frame_crop, kind, lang, v, with_conf=True)
+            if clean_name(r) and c > best[1]:
+                best = (r, c)
+            if best[1] >= 80:
+                break
+        return best[0], parse(kind, best[0])
     if kind not in ("round", "int", "level", "xp"):
-        return raw, val
-    if not raw and val is None:
-        g = whiteness(frame_crop)
-        if float(np.percentile(g, 99.5)) < 120:
-            return raw, val                   # vùng trống thật → khỏi thử thêm
-    # Số: đọc thêm bằng cách xử lý khác, lấy theo đa số (Tesseract đôi khi rớt mất 1 chữ số, vd 34 → 4)
-    reads = [(raw, val)]
-    r1 = read(frame_crop, kind, lang, 1)
-    reads.append((r1, parse(kind, r1)))
-    if reads[0][1] != reads[1][1] or reads[0][1] is None:
-        r2 = read(frame_crop, kind, lang, 2)
-        reads.append((r2, parse(kind, r2)))
+        raw = read(frame_crop, kind, lang)
+        return raw, parse(kind, raw)
+    if not has_text(frame_crop, 90):
+        return "", None                       # vùng trống thật → khỏi OCR
+    # Số: Tesseract hay đọc sai số in đậm (vd 0/56 → /6, 3-5 → 35). Đọc 2–3 lần với cách xử lý khác nhau
+    # (ưu tiên nét mảnh — variant 2), lấy theo đa số; hoà thì lấy lần đọc trước.
+    reads = []
+    for variant, mul in _NUM_ATTEMPTS:
+        sc = _auto_scale(frame_crop, kind) * mul
+        r = read(frame_crop, kind, lang, variant, scale=sc)
+        reads.append((r, parse(kind, r)))
+        vals = [v for _, v in reads if v is not None]
+        if len(reads) >= 2 and len(vals) == len(reads) and len(set(map(str, vals))) == 1:
+            break                             # 2 lần đầu khớp nhau → khỏi đọc thêm
     vals = [v for _, v in reads if v is not None]
     if not vals:
-        return raw, None
-    best = max(vals, key=lambda v: (vals.count(v), len(str(v))))
+        return reads[0][0], None
+    best = max(vals, key=lambda v: (vals.count(v), -vals.index(v)))
     return next(r for r, v in reads if v == best), best
+
+
+_NUM_ATTEMPTS = ((2, 1.0), (2, 1.5), (0, 1.0), (1, 0.6))
+
+
+def _auto_scale(img, kind):
+    h = img.shape[0]
+    return max(1.0, min(6.0, 72 / max(1, h) * 1.4))
 
 
 # ---------------------------------------------------------------- số máu (bảng người chơi)
@@ -302,7 +342,7 @@ def read_digits(img_bgr, scale=6, min_h=0):
     otsu, _ = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     top = float(np.percentile(g, 99.5))
     votes = []
-    for k in (0.2, 0.1, 0.0):
+    for k in (0.3, 0.2, 0.1, 0.0):
         _, b = cv2.threshold(g, otsu + (top - otsu) * k, 255, cv2.THRESH_BINARY)
         n, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
         txt, conf = _decode_digits(b, (n, lab, st), min_h, scale)
@@ -356,8 +396,8 @@ def read_players(crop_img, lang="eng", player_name=""):
 
     def other(y0, y1):
         L = y1 - y0
-        txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), int(0.58 * W):int(0.95 * W)])
-        if v is not None and c >= 0.6:
+        txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), int(0.58 * W):W])
+        if v is not None and c >= 0.65:
             out.append({"y": int(y0), "hp": v, "me": False, "conf": round(c, 2), "raw": txt})
 
     for y0, y1 in _dark_runs(med < 75, 28):
@@ -368,24 +408,142 @@ def read_players(crop_img, lang="eng", player_name=""):
         # khối dài = dòng của bạn (phóng to), có thể dính với dòng ngay dưới
         top = min(L, 78)
         txt, v, c = read_digits(crop_img[y0:y0 + top, int(0.1 * W):int(0.58 * W)], scale=4, min_h=13)
-        if v is not None and c >= 0.55:
+        if v is not None and c >= 0.75:
             out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
         if L - top >= 28:
             other(y1 - 44, y1)
-    if len(out) < 2:
+    # cần thấy ít nhất 3 dòng (bạn + 2 người) mới coi là đang hiện bảng máu; ít hơn thường là
+    # bảng đang hiện thứ khác (thống kê sát thương…) hoặc vùng khoanh chưa đúng
+    if len(out) < 3:
         return out, "unknown"
     return out, "ok"
 
 
+def tesseract_conf(img, psm="7", lang="eng", whitelist=None):
+    """Như tesseract() nhưng trả (chuỗi, độ tin cậy trung bình 0..100) — dùng để chọn cách xử lý ảnh tốt nhất."""
+    exe = core.find_bin("tesseract")
+    ok, png = cv2.imencode(".png", img)
+    if not ok:
+        return "", 0.0
+    cmd = [exe, "stdin", "stdout", "--psm", psm, "-l", pick_lang(lang)]
+    if os.path.isfile(os.path.join(core.TESSDATA_DIR, "eng.traineddata")):
+        cmd += ["--tessdata-dir", core.TESSDATA_DIR]
+    if whitelist:
+        cmd += ["-c", f"tessedit_char_whitelist={whitelist}"]
+    r = core.run(cmd + ["tsv"], input=png.tobytes())
+    words, confs = [], []
+    for ln in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
+        p = ln.split("\t")
+        if len(p) >= 12 and p[11].strip():
+            try:
+                c = float(p[10])
+            except ValueError:
+                continue
+            words.append(p[11].strip())
+            confs.append(c)
+    return " ".join(words), (float(np.mean(confs)) if confs else 0.0)
+
+
+def _prep_line(img, scale, k):
+    """1 dòng chữ trắng/xám trên bảng bán trong suốt: top-hat (xoá nền sáng diện rộng) → Otsu."""
+    g = cv2.resize(whiteness(img), None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    kk = int(k * scale) | 1
+    t = cv2.morphologyEx(g, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kk, kk)))
+    _, b = cv2.threshold(t, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    b = drop_edge_blobs(b)
+    return cv2.copyMakeBorder(255 - b, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=255)
+
+
+def _trait_lang(lang):
+    return "vie" if "vie" in available_langs() else lang
+
+
+def _strip_stray(txt):
+    """Bỏ ký tự lẻ (vạch khung, đốm sáng) ở đầu/cuối dòng: '_ Hỏa Ngục |' → 'Hỏa Ngục'."""
+    toks = [t for t in re.split(r"\s+", clean_name(txt)) if t]
+    while len(toks) > 1 and len(toks[-1]) == 1:
+        toks.pop()
+    while len(toks) > 1 and len(toks[0]) == 1:
+        toks.pop(0)
+    return " ".join(toks)
+
+
+def trait_anchors(crop_img):
+    """Tìm chữ số đếm (to, bên trái mỗi dòng tộc/hệ) → [(y_giữa, x, w, h, số)].
+    Mỗi dòng của bảng tộc/hệ có đúng 1 số đếm, nên số đếm cũng là mốc để tìm dòng."""
+    H, W = crop_img.shape[:2]
+    g = whiteness(crop_img)
+    strip = g[:, :max(4, int(0.3 * W))]
+    th = cv2.morphologyEx(strip, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    _, b = cv2.threshold(th, 45, 255, cv2.THRESH_BINARY)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
+    cands = []
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if not (10 <= h <= 22 and w <= h and a >= 15) or y == 0 or y + h >= H:
+            continue
+        d, c = classify_digit((lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255)
+        if d is not None and c >= 0.75:
+            cands.append([y + h / 2.0, int(x), int(w), int(h), d, c])
+    if not cands:
+        return []
+    xs = sorted(c[1] for c in cands)
+    # cột số đếm: vị trí x xuất hiện nhiều nhất (các chữ số đếm thẳng hàng)
+    col = max(xs, key=lambda x0: sum(1 for x in xs if abs(x - x0) <= 4))
+    rows = []
+    for c in sorted(cands, key=lambda c: c[0]):
+        if abs(c[1] - col) > 5:
+            continue
+        # chữ số thứ 2 ngay bên phải (vd. 10, 12)
+        for c2 in cands:
+            if c2 is not c and abs(c2[0] - c[0]) < 4 and 0 <= c2[1] - (c[1] + c[2]) <= 6:
+                c = [c[0], c[1], c2[1] + c2[2] - c[1], c[3], c[4] * 10 + c2[4], min(c[5], c2[5])]
+        if rows and abs(rows[-1][0] - c[0]) < 25:
+            if c[5] > rows[-1][5]:
+                rows[-1] = c
+            continue
+        rows.append(c)
+    return [(cy, x, w, h, d) for cy, x, w, h, d, _ in rows]
+
+
 def read_traits(crop_img, lang="eng", row_h=53):
-    """Bảng tộc/hệ bên trái: mỗi dòng ~53px (ở khung 1080p): 'số  Tên' + dòng mốc '2 > 4 > 6'.
-    Đọc nửa trên mỗi dòng (số + tên). Số đếm đôi khi bị mất, tên thường đọc được."""
+    """Bảng tộc/hệ bên trái: mỗi dòng ~53px (ở khung 1080p): số đếm to bên trái + tên ở dòng trên
+    + mốc '2 > 4 > 6' ở dòng dưới. Trả về các dòng dạng '4 Tân Phá'."""
+    if crop_img is None or crop_img.size == 0:
+        return []
+    anchors = trait_anchors(crop_img)
+    if len(anchors) < 1:
+        return _read_traits_grid(crop_img, lang, row_h)
+    H, W = crop_img.shape[:2]
+    tl = _trait_lang(lang)
+    lines = []
+    for cy, x, w, h, d in anchors:
+        y0, y1 = max(0, int(cy - 21)), min(H, int(cy + 3))
+        x0 = min(W - 4, x + w + 5)
+        img = crop_img[y0:y1, x0:]
+        best = ("", -1.0)
+        for scale, k in ((3.0, 7), (4.0, 11)):
+            txt, cf = tesseract_conf(_prep_line(img, scale, k), "7", tl)
+            txt = _strip_stray(txt)
+            if txt and cf > best[1]:
+                best = (txt, cf)
+        if best[0]:
+            lines.append(f"{d} {best[0]}")
+    return lines
+
+
+def _read_traits_grid(crop_img, lang="eng", row_h=53):
+    """Cách cũ (khi không tìm thấy số đếm): chia đều theo chiều cao dòng."""
     h = crop_img.shape[0]
     rows = max(1, int(round(h / row_h)))
     lines = []
     for i in range(rows):
         row = crop_img[int(i * h / rows):int(i * h / rows + h / rows * 0.62)]
+        if row.size == 0 or not has_text(row, 90):
+            continue
         raw = read(row, "panelw", lang, scale=3.0)
+        if sum(c.isalpha() for c in raw) < 3:
+            continue
         if raw and not re.match(r"\s*\d", raw):
             n = parse_int(read(row[:, :int(row.shape[1] * 0.2)], "int"), 1, 15)   # số đếm to bên trái
             if n:

@@ -63,7 +63,38 @@ def missing_bins():
 
 
 def run(cmd, **kw):
+    if not cmd or not cmd[0]:
+        raise RuntimeError("Không tìm thấy chương trình cần thiết (ffmpeg / ffprobe / Tesseract). "
+                           "Hãy chạy lại install.bat.")
     return subprocess.run(cmd, capture_output=True, creationflags=CREATE_NO_WINDOW, **kw)
+
+
+class VideoError(RuntimeError):
+    """Lỗi video (hỏng / không phải video / 0 giây) — thông báo đã là tiếng Việt, hiện thẳng cho người dùng."""
+
+
+# cv2.imread / cv2.imwrite không mở được đường dẫn có dấu tiếng Việt trên Windows → đi qua bộ nhớ.
+def imread(path):
+    import cv2
+    import numpy as np
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+    except OSError:
+        return None
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def imwrite(path, img, params=()):
+    import cv2
+    ext = os.path.splitext(path)[1] or ".png"
+    ok, buf = cv2.imencode(ext, img, list(params))
+    if not ok:
+        return False
+    with open(path, "wb") as f:
+        f.write(buf.tobytes())
+    return True
 
 
 # ---------------------------------------------------------------- settings
@@ -101,14 +132,22 @@ def fmt_time(t):
 
 
 def probe(path):
-    """duration, w, h, fps."""
+    """duration, w, h, fps. Lỗi → VideoError (thông báo tiếng Việt)."""
+    name = os.path.basename(path)
+    if not os.path.isfile(path):
+        raise VideoError(f"Không tìm thấy file video:\n{path}")
+    if os.path.getsize(path) == 0:
+        raise VideoError(f"File «{name}» rỗng (0 byte) — không phải video.")
     r = run([find_bin("ffprobe"), "-v", "error", "-print_format", "json", "-show_format",
              "-show_streams", "-select_streams", "v:0", path])
-    data = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+    try:
+        data = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+    except ValueError:
+        data = {}
     info = {"path": path, "duration": 0.0, "w": 0, "h": 0, "fps": 30.0}
     try:
         info["duration"] = float(data.get("format", {}).get("duration", 0) or 0)
-    except ValueError:
+    except (TypeError, ValueError):
         pass
     for s in data.get("streams", []):
         info["w"], info["h"] = int(s.get("width") or 0), int(s.get("height") or 0)
@@ -117,9 +156,19 @@ def probe(path):
             info["fps"] = float(n) / float(d) if float(d) and float(n) else 30.0
         except Exception:
             pass
+        if not info["duration"]:
+            try:
+                info["duration"] = float(s.get("duration") or 0)
+            except (TypeError, ValueError):
+                pass
         break
-    if not info["w"]:
-        raise RuntimeError("Không đọc được video:\n" + r.stderr.decode("utf-8", "replace")[-500:])
+    if not info["w"] or not info["h"]:
+        detail = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise VideoError(f"Không đọc được video «{name}»: file bị hỏng, rỗng (0 giây) hoặc không phải video."
+                         + (f"\n(chi tiết: {detail[-1][:200]})" if detail else ""))
+    if 0 < info["duration"] < 0.5:
+        raise VideoError(f"Video «{name}» chỉ dài {info['duration']:.2f} giây (gần như 0 giây) — "
+                         "quá ngắn để phân tích.")
     return info
 
 
@@ -129,8 +178,10 @@ def work_size(info):
     return w, h
 
 
-def iter_frames(info, fps, cancel=None, start=0.0, end=None):
-    """Sinh (t, ảnh BGR rộng 1920) theo `fps` khung/giây, ffmpeg giải mã + giảm khung."""
+def iter_frames(info, fps, cancel=None, start=0.0, end=None, errors=None):
+    """Sinh (t, ảnh BGR rộng 1920) theo `fps` khung/giây, ffmpeg giải mã + giảm khung.
+    errors: list (tuỳ chọn) — nhận các dòng lỗi ffmpeg in ra (để báo lỗi khi video hỏng)."""
+    import tempfile
     import numpy as np
     w, h = work_size(info)
     args = [find_bin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin"]
@@ -141,7 +192,11 @@ def iter_frames(info, fps, cancel=None, start=0.0, end=None):
         args += ["-t", f"{max(0.1, end - start):.3f}"]
     args += ["-an", "-sn", "-vf", f"fps={fps},scale={w}:{h}:flags=bicubic",
              "-pix_fmt", "bgr24", "-f", "rawvideo", "-"]
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    if not args[0]:
+        raise RuntimeError("Không tìm thấy ffmpeg. Hãy chạy lại install.bat.")
+    # stderr ghi ra file tạm (nếu để PIPE mà không đọc, video hỏng in nhiều lỗi sẽ làm ffmpeg treo)
+    err = tempfile.TemporaryFile()
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=err,
                             creationflags=CREATE_NO_WINDOW, bufsize=w * h * 3)
     size = w * h * 3
     i = 0
@@ -157,15 +212,23 @@ def iter_frames(info, fps, cancel=None, start=0.0, end=None):
     finally:
         proc.kill()
         proc.wait()
+        if errors is not None:
+            try:
+                err.seek(0)
+                errors += err.read().decode("utf-8", "replace").strip().splitlines()[-5:]
+            except Exception:
+                pass
+        err.close()
 
 
 def grab_frame(info, t):
     """Lấy 1 khung hình tại giây t (ảnh BGR rộng 1920)."""
     import numpy as np
     w, h = work_size(info)
-    r = run([find_bin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
-             "-ss", f"{max(0.0, t):.3f}", "-i", info["path"], "-frames:v", "1", "-an",
-             "-vf", f"scale={w}:{h}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"])
-    if len(r.stdout) < w * h * 3:
-        return None
-    return np.frombuffer(r.stdout[:w * h * 3], np.uint8).reshape(h, w, 3).copy()
+    for tt in dict.fromkeys((max(0.0, t), max(0.0, t - 2), 0.0)):     # quá cuối video → lùi lại
+        r = run([find_bin("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
+                 "-ss", f"{tt:.3f}", "-i", info["path"], "-frames:v", "1", "-an",
+                 "-vf", f"scale={w}:{h}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"])
+        if len(r.stdout) >= w * h * 3:
+            return np.frombuffer(r.stdout[:w * h * 3], np.uint8).reshape(h, w, 3).copy()
+    return None
