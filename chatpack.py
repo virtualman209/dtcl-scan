@@ -29,7 +29,7 @@ def _table(rounds):
         tr = ", ".join(f"{t['trait']} {t['count']}" for t in r.get("traits") or []) or "-"
         rows.append(" | ".join(str(x) for x in (
             r["round"], r.get("time", ""), r.get("level") or "?", r.get("xp") or "?",
-            r.get("hp") if r.get("hp") is not None else "?", f"{r.get('gold_start')}→{r.get('gold_end')}",
+            (f"{r['hp']} (#{r['rank_hp']})" if r.get("rank_hp") else r.get("hp")) if r.get("hp") is not None else "?", f"{r.get('gold_start')}→{r.get('gold_end')}",
             r["spent"], r["rolls"], r["xp_buys"], ", ".join(r["bought"]) or "-", tr)))
     return "\n".join(rows)
 

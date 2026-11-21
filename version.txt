@@ -1,5 +1,4 @@
-1.2.0
-- Toạ độ mặc định theo HUD thật (client mới, 16:9) — bấm "Khôi phục toạ độ mặc định" trong Căn chỉnh vùng để dùng
-- Sửa OCR tên tướng trên dải màu (Kha'Zix, Cassiopeia…), đọc "Cấp 7" tiếng Việt, số đọc 2–3 lần lấy đa số
-- Bảng tộc/hệ đọc từng dòng; bảng người chơi tự dò dòng (máu: thử nghiệm)
-- Ngôn ngữ OCR mặc định: auto (eng+vie)
+1.3.0
+- Đọc lại số máu: dò từng ô máu, nhận dạng chữ số bằng mẫu (chính xác hơn nhiều so với Tesseract với chữ nhỏ)
+- Tự nhận ra số máu TO là của bạn, ước lượng hạng theo máu
+- Vùng "Cột máu người chơi" khoanh hẹp: chỉ số máu, không lấy tên / ảnh — bấm "Khôi phục toạ độ mặc định" hoặc khoanh lại

@@ -327,6 +327,9 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
                                                             lang, player_name)
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
+        r["hp_others"] = [p["hp"] for p in r["players"] if not p["me"]]
+        if r["hp"] is not None and r["players_panel"] == "ok":
+            r["rank_hp"] = 1 + sum(1 for h in r["hp_others"] if h > r["hp"])   # hạng theo máu (ước lượng)
         on_progress(0.85 + 0.1 * (idx + 1) / max(1, len(rounds)))
 
 
@@ -422,7 +425,7 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
               + layout.SHOP + ["round_raw", "gold_raw", "level_raw", "xp_raw"])
     write_csv(os.path.join(out, "events.csv"), events, ["time", "t", "round", "type", "detail", "gold", "gold_after"])
     write_csv(os.path.join(out, "rounds.csv"), rounds,
-              ["round", "time", "duration", "level", "xp", "hp", "gold_start", "gold_end", "gold_max", "spent",
+              ["round", "time", "duration", "level", "xp", "hp", "rank_hp", "hp_others", "gold_start", "gold_end", "gold_max", "spent",
                "rolls", "xp_buys", "bought", "level_up", "keyframe"])
     if opts.get("chat_pack", True) and any(r.get("keyframe") for r in rounds):
         import chatpack

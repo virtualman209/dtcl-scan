@@ -211,76 +211,169 @@ def read_field(frame_crop, key, ftype, lang="eng"):
     return next(r for r, v in reads if v == best), best
 
 
-def _text_lines(crop_img, lang, scale=3.0, min_area=60):
-    """Nhị phân hoá cả bảng, xoá đốm nhiễu, tự dò từng dòng chữ theo chiều ngang rồi OCR từng dòng."""
-    b = prep(crop_img, "panel", 0, scale)
-    if b is None:
-        return []
-    mask = (b == 0).astype(np.uint8)
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+# ---------------------------------------------------------------- số máu (bảng người chơi)
+# Số máu người khác chỉ cao ~8px ở 1080p và bị mờ khi nén → Tesseract đọc rất kém.
+# Dùng nhận dạng từng chữ số bằng so khớp mẫu (digits.npz, sinh từ vài font sans đậm bằng tools/mk_digits.py).
+_DIG = None
+_GN = 32
+
+
+def _glyph(m):
+    ys, xs = np.where(m > 0)
+    if len(xs) == 0:
+        return None
+    m = m[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = m.shape
+    nw = max(1, min(_GN, int(round(w * _GN / h))))
+    r = cv2.resize(m, (nw, _GN), interpolation=cv2.INTER_AREA)
+    c = np.zeros((_GN, _GN), np.float32)
+    x0 = (_GN - nw) // 2
+    c[:, x0:x0 + nw] = r
+    return cv2.GaussianBlur(c, (3, 3), 0)
+
+
+def _templates():
+    global _DIG
+    if _DIG is None:
+        d = np.load(os.path.join(core.APP_DIR, "digits.npz"))
+        t = d["t"].reshape(len(d["t"]), -1)
+        t = t - t.mean(1, keepdims=True)
+        t /= np.linalg.norm(t, axis=1, keepdims=True) + 1e-6
+        _DIG = (t, d["l"])
+    return _DIG
+
+
+def classify_digit(mask):
+    g = _glyph(mask)
+    if g is None:
+        return None, 0.0
+    tf, tl = _templates()
+    v = g.reshape(-1)
+    v = v - v.mean()
+    v /= np.linalg.norm(v) + 1e-6
+    sc = tf @ v
+    best = {}
+    for s_, l_ in zip(sc, tl):
+        best[int(l_)] = max(best.get(int(l_), -1.0), float(s_))
+    lab = max(best, key=best.get)
+    return lab, best[lab]
+
+
+def _decode_digits(b, lab_info, min_h, scale):
+    n, lab, st = lab_info
+    H, W = b.shape
+    comps = []
     for i in range(1, n):
-        x, y, w, h, area = stats[i]
-        if area < min_area or h > 40 * scale or w > crop_img.shape[1] * scale * 0.8:
-            mask[lab == i] = 0                      # đốm nhỏ, mảng to bất thường → bỏ
-    prof = mask.sum(axis=1)
-    bands, y = [], 0
-    while y < len(prof):
-        if prof[y] > 0:
+        x, y, w, h, a = st[i]
+        if h < (min_h * scale if min_h else 0.2 * H) or h > 0.8 * H or h > 32 * scale or w > 0.5 * W \
+                or w > 1.9 * h or y == 0 or y + h >= H:
+            continue
+        comps.append((x, y, w, h, i))
+    if not comps:
+        return "", []
+    lines = []                                 # gom chữ số cùng dòng, chọn dòng nhiều số nhất / to nhất
+    for c in sorted(comps, key=lambda c: c[1] + c[3] / 2):
+        cy = c[1] + c[3] / 2
+        for ln in lines:
+            if abs(ln["cy"] - cy) < 0.4 * max(ln["h"], c[3]) and abs(ln["h"] - c[3]) < 0.35 * max(ln["h"], c[3]):
+                ln["c"].append(c)
+                break
+        else:
+            lines.append({"cy": cy, "h": c[3], "c": [c]})
+    best = max(lines, key=lambda ln: (len(ln["c"]), ln["h"]))
+    txt, conf = "", []
+    for x, y, w, h, i in sorted(best["c"]):
+        m = (lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255
+        parts = (m[:, :w // 2], m[:, w // 2:]) if w > 0.85 * h else (m,)   # 2 chữ số dính nhau
+        for part in parts:
+            d, c = classify_digit(part)
+            if d is not None:
+                txt += str(d)
+                conf.append(c)
+    return txt, conf
+
+
+def read_digits(img_bgr, scale=6, min_h=0):
+    """Đọc 1 số nhỏ (chữ trắng trên nền tối) bằng so khớp mẫu từng chữ số, thử 3 mức ngưỡng
+    (chữ dày/mảnh khác nhau) rồi lấy theo đa số. Trả (chuỗi, số, độ tin cậy)."""
+    if img_bgr is None or img_bgr.size == 0:
+        return "", None, 0.0
+    g = cv2.resize(whiteness(img_bgr), None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    otsu, _ = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    top = float(np.percentile(g, 99.5))
+    votes = []
+    for k in (0.2, 0.1, 0.0):
+        _, b = cv2.threshold(g, otsu + (top - otsu) * k, 255, cv2.THRESH_BINARY)
+        n, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
+        txt, conf = _decode_digits(b, (n, lab, st), min_h, scale)
+        v = parse_int(txt, 0, 150) if txt else None
+        if v is not None and len(txt) <= 3:
+            votes.append((txt, v, min(conf)))
+    if not votes:
+        return "", None, 0.0
+    vals = [v for _, v, _ in votes]
+    best = max(vals, key=lambda v: (vals.count(v), -vals.index(v)))
+    t, v, c = next(x for x in votes if x[1] == best)
+    return t, v, c
+
+
+def _dark_runs(mask, lo, close=4):
+    m = mask.copy()
+    i = 0
+    while i < len(m):                       # lấp khoảng sáng ngắn (do chính chữ số) trong vùng tối
+        if not m[i]:
+            j = i
+            while j < len(m) and not m[j]:
+                j += 1
+            if 0 < i and j < len(m) and j - i <= close:
+                m[i:j] = True
+            i = j
+        else:
+            i += 1
+    out, y = [], 0
+    while y < len(m):
+        if m[y]:
             y0 = y
-            while y < len(prof) and (prof[y] > 0 or (y + 4 < len(prof) and prof[y:y + 5].any())):
+            while y < len(m) and m[y]:
                 y += 1
-            if 5 * scale <= y - y0 <= 40 * scale and prof[y0:y].sum() > 60 * scale:
-                bands.append((y0, y))
+            if y - y0 >= lo:
+                out.append((y0, y))
         y += 1
-    out = []
-    for y0, y1 in bands:
-        img = 255 - mask[max(0, y0 - 6):y1 + 6] * 255
-        img = cv2.copyMakeBorder(img.astype(np.uint8), 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
-        raw = tesseract(img, "7", None, lang)
-        if raw:
-            out.append((int(y0 / scale), raw, img))
     return out
 
 
-def _right_number(line_img):
-    """Số máu nằm ở cụm chữ ngoài cùng bên phải của dòng → cắt riêng cụm đó, đọc chỉ-chữ-số."""
-    ink = (line_img < 128).any(axis=0)
-    xs = np.where(ink)[0]
-    if len(xs) == 0:
-        return None
-    rows = np.where((line_img < 128).any(axis=1))[0]
-    text_h = (rows[-1] - rows[0]) if len(rows) else 30
-    gaps = np.where(np.diff(xs) > max(18, text_h * 0.9))[0]   # khoảng trống giữa tên và số
-    x0 = xs[gaps[-1] + 1] if len(gaps) else xs[0]
-    part = line_img[:, max(0, x0 - 6):xs[-1] + 7]
-    part = cv2.copyMakeBorder(part, 0, 0, 10, 10, cv2.BORDER_CONSTANT, value=255)
-    txt = tesseract(part, "7", "0123456789", "eng")
-    v = parse_int(txt, 0, 150)
-    return v
-
-
 def read_players(crop_img, lang="eng", player_name=""):
-    """Bảng người chơi bên phải: mỗi dòng 'Tên  máu'. Dòng của bạn chỉ hiện số máu to, không có tên
-    (hoặc khớp 'Tên trong game' trong Cài đặt) → đánh dấu 'me'.
-    Nếu bảng đang hiện thống kê sát thương (số dạng 1.831) thì trả về 'damage'.
-    Lưu ý: số máu của người khác rất nhỏ, video nén mạnh có thể đọc sai."""
+    """Cột số máu bên phải. Vùng cần khoanh: từ mép trái số máu TO của bạn tới mép phải ô máu nhỏ
+    của người khác (không lấy tên, không lấy ảnh đại diện), từ người trên cùng tới người dưới cùng.
+    Mỗi người khác có 1 ô tối nhỏ chứa số máu; dòng của bạn được phóng to, số máu to hơn, không có ô nhỏ.
+    Trả về ([{'y','hp','me','conf'}], trạng thái)."""
+    if crop_img is None or crop_img.size == 0:
+        return [], "empty"
+    H, W = crop_img.shape[:2]
+    g = whiteness(crop_img).astype(np.float32)
+    med = np.median(g[:, int(0.62 * W):int(0.88 * W)], axis=1)
     out = []
-    me_n = norm(player_name)
-    lines = _text_lines(crop_img, lang)
-    if sum(1 for _, raw, _ in lines if re.search(r"\d[.,]\d{3}", raw)) >= 2:
-        return [], "damage"
-    for y, raw, img in lines:
-        name = clean_name(re.sub(r"\d+", " ", raw))
-        hp = _right_number(img)
-        if hp is None:
-            nums = [int(x) for x in re.findall(r"\d{1,3}", raw) if int(x) <= 150]
-            hp = nums[-1] if nums else None
-        if hp is None:
+
+    def other(y0, y1):
+        L = y1 - y0
+        txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), int(0.58 * W):int(0.95 * W)])
+        if v is not None and c >= 0.6:
+            out.append({"y": int(y0), "hp": v, "me": False, "conf": round(c, 2), "raw": txt})
+
+    for y0, y1 in _dark_runs(med < 75, 28):
+        L = y1 - y0
+        if L <= 62:
+            other(y0, y1)
             continue
-        is_me = (me_n in norm(name)) if (me_n and len(name) >= 3) else len(name) < 3
-        if is_me and any(p["me"] for p in out):
-            is_me = False
-        out.append({"y": y, "name": name, "hp": hp, "me": bool(is_me), "raw": raw})
+        # khối dài = dòng của bạn (phóng to), có thể dính với dòng ngay dưới
+        top = min(L, 78)
+        txt, v, c = read_digits(crop_img[y0:y0 + top, int(0.1 * W):int(0.58 * W)], scale=4, min_h=13)
+        if v is not None and c >= 0.55:
+            out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
+        if L - top >= 28:
+            other(y1 - 44, y1)
+    if len(out) < 2:
+        return out, "unknown"
     return out, "ok"
 
 

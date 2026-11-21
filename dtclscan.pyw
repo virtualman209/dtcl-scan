@@ -469,10 +469,11 @@ def panel_text(key, crop, lang):
     if key == "traits":
         tr = ocr.parse_traits(ocr.read_traits(crop, lang))
         return ", ".join(f"{t['trait']} {t['count'] or '?'}" for t in tr) or ""
-    pl, st = ocr.read_players(crop, lang, core.get_settings().get("player_name", ""))
-    if st == "damage":
-        return "(bảng đang hiện thống kê sát thương — chọn lúc khác)"
-    return ", ".join(("BẠN " if p["me"] else "") + f"{p['name'] or '?'} {p['hp']}" for p in pl)
+    pl, st = ocr.read_players(crop, lang)
+    txt = ", ".join(("BẠN " if p["me"] else "") + str(p["hp"]) for p in pl)
+    if st != "ok":
+        txt += "  (ít dòng đọc được — bảng có thể đang hiện thống kê sát thương, hoặc vùng khoanh chưa đúng)"
+    return txt
 
 
 # ============================================================ căn chỉnh vùng HUD

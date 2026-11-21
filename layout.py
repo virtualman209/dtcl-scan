@@ -22,7 +22,9 @@ FIELDS = {
     "shop4":   ("Cửa hàng ô 4 – tên tướng", "name", ""),
     "shop5":   ("Cửa hàng ô 5 – tên tướng / Wisp", "name", "Ô ngoài cùng bên phải (có thể là Wisp)"),
     "traits":  ("Bảng tộc/hệ (trái)", "block", "Danh sách tộc/hệ đang kích hoạt bên trái"),
-    "players": ("Bảng người chơi + máu (phải)", "block", "Danh sách 8 người chơi và máu bên phải"),
+    "players": ("Cột máu người chơi (phải)", "block",
+                "Khoanh hẹp: từ mép trái số máu TO của bạn tới mép phải ô máu nhỏ của người khác. "
+                "KHÔNG lấy tên, KHÔNG lấy ảnh đại diện. Từ người trên cùng tới người dưới cùng."),
 }
 SAMPLE_FIELDS = ["round", "gold", "level", "xp", "shop1", "shop2", "shop3", "shop4", "shop5"]
 BLOCK_FIELDS = ["traits", "players"]
@@ -37,7 +39,7 @@ def _default_boxes():
         "level": (338, 880, 404, 914),       # "Cấp 7"
         "xp": (458, 880, 520, 913),          # "0/56"
         "traits": (100, 255, 258, 742),      # cột tộc/hệ bên trái (không lấy icon)
-        "players": (1690, 158, 1856, 810),   # 8 dòng người chơi: tên + máu (không lấy ảnh đại diện)
+        "players": (1780, 158, 1856, 810),   # cột số máu: từ số máu to của bạn → hết ô máu nhỏ (không lấy tên, ảnh)
     }
     for i in range(5):                        # dòng tên tướng ở đáy 5 thẻ cửa hàng, cách nhau ~202.5px
         x = 549 + i * 202.5
