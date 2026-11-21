@@ -1,0 +1,3 @@
+# Danh sách tên tướng (mỗi dòng 1 tên, đúng như hiển thị trong game của bạn).
+# Không bắt buộc. Nếu điền, tên OCR đọc sai sẽ được tự sửa về tên gần nhất trong danh sách này.
+# Dòng bắt đầu bằng # bị bỏ qua.

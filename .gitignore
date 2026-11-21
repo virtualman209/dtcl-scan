@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+config.json
+update_state.json
+settings.json
+update_error.txt
+bin/*
+!bin/.keep
+tessdata/
+profiles/*
+!profiles/.keep
+*_dtcl/
