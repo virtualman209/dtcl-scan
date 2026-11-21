@@ -30,18 +30,18 @@ SHOP = ["shop1", "shop2", "shop3", "shop4", "shop5"]
 
 
 def _default_boxes():
-    """Ước lượng HUD 1920x1080 (pixel) → đổi sang tỉ lệ."""
+    """HUD TFT 16:9 (đo từ client thật, quy về 1920x1080) → đổi sang tỉ lệ."""
     px = {
-        "round": (770, 2, 860, 40),
-        "gold": (905, 878, 1010, 912),
-        "level": (300, 878, 400, 912),
-        "xp": (400, 878, 470, 912),
-        "traits": (0, 230, 250, 760),
-        "players": (1660, 150, 1920, 820),
+        "round": (758, 3, 824, 34),          # "3-5" (bỏ icon mỏ neo bên trái)
+        "gold": (1014, 882, 1068, 915),      # "43" (bỏ icon đồng vàng)
+        "level": (338, 880, 404, 914),       # "Cấp 7"
+        "xp": (458, 880, 520, 913),          # "0/56"
+        "traits": (100, 255, 258, 742),      # cột tộc/hệ bên trái (không lấy icon)
+        "players": (1690, 158, 1856, 810),   # 8 dòng người chơi: tên + máu (không lấy ảnh đại diện)
     }
-    for i in range(5):                        # 5 thẻ tướng, mỗi thẻ ~201px
-        x = 481 + i * 201
-        px[f"shop{i + 1}"] = (x + 8, 1040, x + 150, 1072)
+    for i in range(5):                        # dòng tên tướng ở đáy 5 thẻ cửa hàng, cách nhau ~202.5px
+        x = 549 + i * 202.5
+        px[f"shop{i + 1}"] = (x, 1043, x + 150, 1073)
     return {k: [round(x1 / 1920, 4), round(y1 / 1080, 4), round(x2 / 1920, 4), round(y2 / 1080, 4)]
             for k, (x1, y1, x2, y2) in px.items()}
 

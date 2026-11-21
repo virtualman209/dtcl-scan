@@ -442,7 +442,7 @@ class SettingsDialog:
         f.pack(fill="both", expand=True)
         self.vars = {}
         rows = [("player_name", "Tên trong game của bạn", "để tìm đúng dòng máu của bạn ở bảng bên phải"),
-                ("ocr_lang", "Ngôn ngữ OCR", "eng (mặc định) · eng+vie nếu client tiếng Việt"),
+                ("ocr_lang", "Ngôn ngữ OCR", "auto (eng+vie nếu có) · eng · eng+vie"),
                 ("api_key", "Claude API key", "chỉ cần khi dùng AI · lấy ở console.anthropic.com"),
                 ("model", "Model AI", "vd. claude-sonnet-5-5 (cân bằng) · claude-haiku-5-5 (rẻ hơn)")]
         for i, (k, label, hint) in enumerate(rows):
@@ -462,6 +462,17 @@ class SettingsDialog:
     def save(self):
         core.set_settings(**{k: v.get().strip() for k, v in self.vars.items()})
         self.top.destroy()
+
+
+def panel_text(key, crop, lang):
+    import ocr
+    if key == "traits":
+        tr = ocr.parse_traits(ocr.read_traits(crop, lang))
+        return ", ".join(f"{t['trait']} {t['count'] or '?'}" for t in tr) or ""
+    pl, st = ocr.read_players(crop, lang, core.get_settings().get("player_name", ""))
+    if st == "damage":
+        return "(bảng đang hiện thống kê sát thương — chọn lúc khác)"
+    return ", ".join(("BẠN " if p["me"] else "") + f"{p['name'] or '?'} {p['hp']}" for p in pl)
 
 
 # ============================================================ căn chỉnh vùng HUD
@@ -644,20 +655,24 @@ class CalibrateWindow:
         self.zphoto, _ = to_photo(c, 300, 140)
         self.zoom.config(image=self.zphoto, width=300, height=140)
         kind = ocr.field_kind(self.sel, self.L.FIELDS[self.sel][1])
-        b = ocr.prep(c, kind)
+        b = ocr.prep(c, {"traits": "panelw", "players": "panel"}.get(self.sel, kind),
+                     scale=3.0 if self.sel in ("traits", "players") else None)
         if b is not None:
             import cv2
             self.zphoto2, _ = to_photo(cv2.cvtColor(b, cv2.COLOR_GRAY2BGR), 300, 140)
             self.zoom2.config(image=self.zphoto2, width=300, height=140)
         self.ocr_lbl.config(text="đang đọc…")
         frame, sel = self.frame, self.sel
-        lang = core.get_settings().get("ocr_lang", "eng")
+        lang = core.get_settings().get("ocr_lang", "auto")
 
         def work():
             try:
-                raw, val = ocr.read_field(self.L.crop(frame, self.prof["boxes"][sel]), sel,
-                                          self.L.FIELDS[sel][1], lang)
-                txt = f"đọc thô: {raw!r}\n→ hiểu là: {val!r}"
+                c = self.L.crop(frame, self.prof["boxes"][sel])
+                if sel in ("traits", "players"):
+                    txt = "→ " + panel_text(sel, c, lang)
+                else:
+                    raw, val = ocr.read_field(c, sel, self.L.FIELDS[sel][1], lang)
+                    txt = f"đọc thô: {raw!r}\n→ hiểu là: {val!r}"
             except Exception as ex:  # noqa: BLE001
                 txt = f"lỗi OCR: {ex}"
             self.top.after(0, lambda: self.ocr_lbl.config(text=txt) if self.sel == sel else None)
@@ -667,14 +682,18 @@ class CalibrateWindow:
         if self.frame is None:
             return
         import ocr
-        lang = core.get_settings().get("ocr_lang", "eng")
+        lang = core.get_settings().get("ocr_lang", "auto")
         frame = self.frame
 
         def work():
             res = {}
             for k in self.keys:
                 try:
-                    _, v = ocr.read_field(self.L.crop(frame, self.prof["boxes"][k]), k, self.L.FIELDS[k][1], lang)
+                    c = self.L.crop(frame, self.prof["boxes"][k])
+                    if k in ("traits", "players"):
+                        v = panel_text(k, c, lang)
+                    else:
+                        _, v = ocr.read_field(c, k, self.L.FIELDS[k][1], lang)
                 except Exception as ex:  # noqa: BLE001
                     v = f"lỗi: {ex}"
                 if isinstance(v, list):

@@ -1,3 +1,5 @@
-1.1.0
-- Thêm "Gói gửi Claude chat": ghép ảnh các vòng + câu hỏi có sẵn, dùng được mà không cần API key
-- Đọc lại số bằng cách xử lý khác khi OCR đọc lỗi
+1.2.0
+- Toạ độ mặc định theo HUD thật (client mới, 16:9) — bấm "Khôi phục toạ độ mặc định" trong Căn chỉnh vùng để dùng
+- Sửa OCR tên tướng trên dải màu (Kha'Zix, Cassiopeia…), đọc "Cấp 7" tiếng Việt, số đọc 2–3 lần lấy đa số
+- Bảng tộc/hệ đọc từng dòng; bảng người chơi tự dò dòng (máu: thử nghiệm)
+- Ngôn ngữ OCR mặc định: auto (eng+vie)

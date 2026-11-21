@@ -93,7 +93,7 @@ def write(out_dir, m):
     if m.get("ai_notes"):
         parts.append(f"<h2>Nhận xét của AI</h2><div class='notes'>{e(m['ai_notes'])}</div>")
     parts.append(gold_chart(m["rounds"]))
-    parts.append("<h2>Từng vòng</h2><table><tr><th>Vòng</th><th>Lúc</th><th>Cấp</th><th>XP</th><th>Máu</th>"
+    parts.append("<h2>Từng vòng</h2><table><tr><th>Vòng</th><th>Lúc</th><th>Cấp</th><th>XP</th><th>Máu*</th>"
                  "<th>Vàng đầu→cuối</th><th>Tiêu</th><th>Roll</th><th>Mua XP</th><th>Mua tướng / sự kiện</th>"
                  "<th>Ảnh chốt</th></tr>")
     for r in m["rounds"]:
@@ -114,7 +114,7 @@ def write(out_dir, m):
             + (f"<details><summary>{len(evs)} sự kiện</summary>{evh}</details>" if evs else "")
             + f"</td><td>{img}</td></tr>")
     parts.append("</table><p class='sub'>Dữ liệu đầy đủ: rounds.csv, events.csv, samples.csv, match.json "
-                 "(cùng thư mục). Số liệu do OCR đọc tự động nên có thể lệch vài chỗ.</p></main></body></html>")
+                 "(cùng thư mục). Số liệu do OCR đọc tự động nên có thể lệch vài chỗ. *Máu đọc từ bảng người chơi (chữ rất nhỏ) — thử nghiệm, hay sai khi video nén mạnh.</p></main></body></html>")
     path = os.path.join(out_dir, "report.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(parts))

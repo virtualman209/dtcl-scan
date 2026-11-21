@@ -321,12 +321,10 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
         cv2.imwrite(os.path.join(kdir, name), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         r["keyframe"] = "keyframes/" + name
         r["keyframe_t"] = round(t, 1)
-        tr = ocr.read(layout.crop(frame, prof["boxes"]["traits"]), "block", lang)
-        pl = ocr.read(layout.crop(frame, prof["boxes"]["players"]), "block", lang)
-        r["traits_raw"] = ocr.parse("block", tr)
+        r["traits_raw"] = ocr.read_traits(layout.crop(frame, prof["boxes"]["traits"]), lang)
         r["traits"] = ocr.parse_traits(r["traits_raw"])
-        r["players_raw"] = ocr.parse("block", pl)
-        r["players"] = ocr.parse_players(r["players_raw"], player_name)
+        r["players"], r["players_panel"] = ocr.read_players(layout.crop(frame, prof["boxes"]["players"]),
+                                                            lang, player_name)
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
         on_progress(0.85 + 0.1 * (idx + 1) / max(1, len(rounds)))
@@ -356,7 +354,7 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
         raise RuntimeError("Thiếu: " + ", ".join(miss) + ". Hãy chạy lại install.bat.")
     prof = layout.load(opts.get("profile") or "default_1080p")
     fps = float(opts.get("fps") or 2)
-    lang = opts.get("ocr_lang") or "eng"
+    lang = opts.get("ocr_lang") or "auto"
     info = core.probe(video)
     out = out_dir_for(video)
     log(f"Video: {os.path.basename(video)}  {info['w']}x{info['h']}  {core.fmt_time(info['duration'])}")

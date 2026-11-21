@@ -69,7 +69,7 @@ def run(cmd, **kw):
 # ---------------------------------------------------------------- settings
 DEFAULT_SETTINGS = {"profile": "default_1080p", "fps": 2, "keyframes": True, "ai_board": False,
                     "ai_coach": False, "chat_pack": True, "api_key": "", "model": "claude-sonnet-5-5",
-                    "player_name": "", "ocr_lang": "eng", "ask_open": True}
+                    "player_name": "", "ocr_lang": "auto", "ask_open": True}
 
 
 def get_settings():
