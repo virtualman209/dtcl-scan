@@ -84,3 +84,34 @@ def test_settings_has_no_dead_player_name_field():
     src = open(os.path.join(ROOT, "dtclscan.pyw"), encoding="utf-8").read()
     assert '("player_name"' not in src
     assert "Tên trong game" not in open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
+
+
+def test_single_wrong_reads_do_not_corrupt(fake1080, monkeypatch):
+    """Tiêm lỗi (vòng 2 review): MỘT lần OCR sai — vòng 4-1 → '1-1', vòng 2-2 → '2-7' (lớn hơn), cấp 6 → 1 —
+    không được sinh vòng ma, xoá đoạn đúng, làm mất hành động hay làm cấp đi lùi."""
+    import threading
+    orig = ocr.read_field
+    lock = threading.Lock()
+    seen = {}
+    wrong = {("round", "4-1"): "1-1", ("round", "2-2"): "2-7", ("level", 6): 1}
+
+    def fake(c, key, ftype, lang="eng"):
+        raw, val = orig(c, key, ftype, lang)
+        k = (key, val)
+        if k in wrong:
+            with lock:
+                seen[k] = seen.get(k, 0) + 1
+                if seen[k] == 3:
+                    return str(wrong[k]), wrong[k]
+        return raw, val
+
+    monkeypatch.setattr(ocr, "read_field", fake)
+    o = dict(core.DEFAULT_SETTINGS, fps=2, keyframes=False, chat_pack=False)
+    rep = analyze.run_analysis(fake1080["video"], o, log=lambda s: None)
+    m = json.load(open(os.path.join(os.path.dirname(rep), "match.json"), encoding="utf-8"))
+    assert all(v >= 3 for v in seen.values()) and len(seen) == 3, seen    # đã tiêm đủ 3 lỗi
+    truth = fake1080["truth"]
+    assert [r["round"] for r in m["rounds"]] == truth["rounds"]
+    assert m["summary"]["final_level"] == truth["final_level"]
+    assert m["summary"]["units_bought"] == 3 and m["summary"]["total_xp_buys"] == 4
+    assert m["summary"]["total_rolls"] == 3

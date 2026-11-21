@@ -1,11 +1,11 @@
 1.4.0
 - Đọc bảng tộc/hệ chính xác hơn: tìm từng dòng theo chữ số đếm (cột chữ số to bên trái), không còn dòng rác; bền với video 720p / nén
-- Đọc số vòng / vàng / cấp / XP ổn định hơn với video nén; số đọc lại định kỳ để lần đọc sai không bị giữ lâu
+- Đọc số vòng / vàng / cấp / XP ổn định hơn với video nén; một lần đọc sai không tạo vòng ma, không làm cấp đi lùi
 - Sửa: vàng cuối / XP mỗi vòng trong rounds.csv, báo cáo bị lấy nhầm số đầu vòng sau
-- Sửa: đọc nhầm 1 lần ra vòng lớn hơn làm mất cả các vòng sau
-- Số máu người khác: bỏ phiếu nhiều khung, kiểm tra thứ tự máu giảm dần; không chắc thì để trống thay vì ghi số sai
+- Sửa: vàng đọc sai vọt lên vài giây (video nén) sinh sự kiện 'Tiêu vàng' ma
+- Số máu người khác: bỏ phiếu nhiều khung, kiểm thứ tự máu giảm dần; video dưới 1080p chỉ đọc máu của bạn (không đoán)
 - Profile mặc định chưa căn chỉnh luôn dùng toạ độ mới nhất của bản cập nhật
 - Bỏ ô 'Tên trong game' (không còn cần); install kiểm tra dữ liệu OCR tiếng Việt
 - Sửa lỗi: thư mục / tên video có dấu không lưu được ảnh chốt; video hỏng có thể làm treo
 - Thông báo lỗi tiếng Việt cho video hỏng / không phải video / 0 giây; chạy lại dọn kết quả cũ
-- Cửa sổ Căn chỉnh vùng, Cài đặt vừa màn hình laptop 1366x768
+- Cửa sổ Căn chỉnh vùng, Cài đặt vừa màn hình laptop 1366x768 (nút luôn ở đáy, không bị che)

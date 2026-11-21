@@ -398,12 +398,18 @@ def _dark_runs(mask, lo, close=4):
 PL_CFG = {"cols": (0.62, 0.88), "pct": 50, "dark": 75, "x0": 0.58, "right": False, "close": 8}
 
 
-def read_players(crop_img, lang="eng", player_name=""):
+# Video gốc thấp hơn mức này: chữ số máu người khác (~8px ở 1080p) chỉ còn 5–7px → đọc sai mà vẫn đúng thứ tự
+# giảm dần (đo trên ảnh thật thu 720p / 900p: 3–5 số sai). Khi đó chỉ trả máu của bạn.
+MIN_SRC_H_OTHERS = 1000
+
+
+def read_players(crop_img, lang="eng", player_name="", src_h=None):
     """Cột số máu bên phải. Vùng cần khoanh: từ mép trái số máu TO của bạn tới mép phải ô máu nhỏ
     của người khác (không lấy tên, không lấy ảnh đại diện), từ người trên cùng tới người dưới cùng.
     Mỗi người khác có 1 ô tối nhỏ chứa số máu; dòng của bạn được phóng to, số máu to hơn, không có ô nhỏ.
     Bảng TFT luôn xếp theo máu giảm dần → dòng nào phá thứ tự là đọc sai: bỏ đi và hạ trạng thái.
-    Trả về ([{'y','hp','me','conf'}], trạng thái): 'ok' | 'uncertain' (có dòng bị loại) | 'unknown' | 'empty'."""
+    src_h: chiều cao video GỐC (trước khi phóng về 1920); dưới MIN_SRC_H_OTHERS → 'low_res', bỏ máu người khác.
+    Trả về ([{'y','hp','me','conf'}], trạng thái): 'ok' | 'uncertain' (có dòng bị loại) | 'low_res' | 'unknown' | 'empty'."""
     if crop_img is None or crop_img.size == 0:
         return [], "empty"
     H, W = crop_img.shape[:2]
@@ -432,6 +438,8 @@ def read_players(crop_img, lang="eng", player_name=""):
             out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
         if L - top >= 28:
             other(y1 - 44, y1)
+    if src_h and src_h < MIN_SRC_H_OTHERS:
+        return [r for r in out if r["me"]], "low_res"
     out, dropped = _keep_descending(out)
     # cần thấy ít nhất 3 dòng (bạn + 2 người) mới coi là đang hiện bảng máu; ít hơn thường là
     # bảng đang hiện thứ khác (thống kê sát thương…) hoặc vùng khoanh chưa đúng

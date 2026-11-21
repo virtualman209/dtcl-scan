@@ -127,9 +127,9 @@ def setup_style(root):
 def center(win, w, h):
     win.update_idletasks()
     sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-    w, h = min(w, sw), min(h, sh - 40)
+    w, h = min(w, sw), min(h, sh - 80)          # chừa thanh tiêu đề + taskbar Windows
     x = max(0, (sw - w) // 2)
-    y = max(0, min((sh - h) // 3, sh - 40 - h))
+    y = max(0, min((sh - h) // 3, sh - 80 - h))
     win.geometry(f"{w}x{h}+{x}+{y}")
 
 
@@ -548,14 +548,17 @@ class SettingsDialog:
         self.top.destroy()
 
 
-def panel_text(key, crop, lang):
+def panel_text(key, crop, lang, src_h=None):
     import ocr
     if key == "traits":
         tr = ocr.parse_traits(ocr.read_traits(crop, lang))
         return ", ".join(f"{t['trait']} {t['count'] or '?'}" for t in tr) or ""
-    pl, st = ocr.read_players(crop, lang)
+    pl, st = ocr.read_players(crop, lang, src_h=src_h)
     txt = ", ".join(("BẠN " if p["me"] else "") + str(p["hp"]) for p in pl)
-    if st == "uncertain":
+    if st == "low_res":
+        txt += (f"  (video {src_h}p — dưới 1080p: chữ số máu người khác quá nhỏ, không đọc được; "
+                "chỉ đọc máu của bạn. Quay video 1080p để có máu người khác)")
+    elif st == "uncertain":
         txt += "  (có dòng đọc sai thứ tự máu giảm dần nên đã bỏ — nên khoanh lại cho sát cột số máu)"
     elif st != "ok":
         txt += "  (ít dòng đọc được — bảng có thể đang hiện thống kê sát thương, hoặc vùng khoanh chưa đúng)"
@@ -580,11 +583,27 @@ class CalibrateWindow:
         sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
         self.CW = max(560, min(1200, sw - 400, int((sh - 190) * 16 / 9)))     # vừa màn hình laptop
         self.CH = int(self.CW * 9 / 16)
-        self.ZH = 140 if sh >= 900 else 70           # ô phóng to nhỏ lại trên màn hình laptop 768px
+        self.ZH = 140 if sh >= 900 else 60           # ô phóng to nhỏ lại trên màn hình laptop 768px
         center(top, self.CW + 360, min(sh - 60, max(self.CH + 90, 640)))
 
         left = ttk.Frame(top, padding=8)
         left.pack(side="left", fill="y")
+        # nhóm nút + mẹo đặt cố định ở ĐÁY cột trái (pack trước): màn hình thấp thì phần ảnh phóng to bị thu,
+        # không bao giờ mất nút
+        ttk.Label(left, text="Mẹo: căn lúc đang chuẩn bị (thấy cửa hàng, số vàng). "
+                             "Mỗi độ phân giải nên có 1 profile riêng.",
+                  style="Hint.TLabel", wraplength=340).pack(side="bottom", anchor="w", pady=(4, 0))
+        btns = ttk.Frame(left)
+        btns.pack(side="bottom", fill="x")
+        btns.columnconfigure(0, weight=1)
+        btns.columnconfigure(1, weight=1)
+        ttk.Button(btns, text="Lưu", command=self.save).grid(row=0, column=0, sticky="we", padx=(0, 2), pady=2)
+        ttk.Button(btns, text="Lưu thành profile mới…", command=self.save_as).grid(row=0, column=1, sticky="we",
+                                                                                pady=2)
+        ttk.Button(btns, text="Khôi phục toạ độ mặc định", command=self.reset).grid(row=1, column=0, columnspan=2,
+                                                                                  sticky="we", pady=2)
+        ttk.Button(left, text="Thử đọc tất cả vùng (OCR)", command=self.test_all).pack(side="bottom", fill="x",
+                                                                                     pady=(6, 2))
         ttk.Label(left, text="1. Chọn vùng", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.lst = tk.Listbox(left, width=40, height=len(layout.FIELDS), activestyle="none", exportselection=False,
                               font=("Segoe UI", 10))
@@ -595,12 +614,10 @@ class CalibrateWindow:
         self.lst.config(xscrollcommand=xs.set)
         self.keys = list(layout.FIELDS)
         self.lst.bind("<<ListboxSelect>>", self.on_select)
-        self.desc = ttk.Label(left, text="", style="Hint.TLabel", wraplength=300)
-        self.desc.pack(anchor="w", pady=(4, 8))
-        ttk.Label(left, text="2. Kéo chuột trên ảnh để khoanh vùng.\nMũi tên: dịch 1px · Shift+mũi tên: đổi cỡ",
-                  style="Hint.TLabel").pack(anchor="w")
-        ttk.Label(left, text="Vùng đang chọn (phóng to) và ảnh sau xử lý:", style="Hint.TLabel").pack(anchor="w",
-                                                                                                    pady=(10, 2))
+        self.desc = ttk.Label(left, text="", style="Hint.TLabel", wraplength=340)
+        self.desc.pack(anchor="w", pady=(2, 4))
+        ttk.Label(left, text="2. Kéo chuột trên ảnh để khoanh · mũi tên: dịch 1px · Shift: đổi cỡ",
+                  style="Hint.TLabel", wraplength=340).pack(anchor="w", pady=(0, 2))
         zh = self.ZH
         self._blank = tk.PhotoImage(width=1, height=1)       # có ảnh → width/height tính bằng pixel
         self.zoom = tk.Label(left, bg="#222", image=self._blank, width=300, height=zh)
@@ -610,20 +627,6 @@ class CalibrateWindow:
         self.ocr_lbl = tk.Label(left, text="", wraplength=330, font=("Consolas", 9), height=3, anchor="nw",
                                 justify="left")
         self.ocr_lbl.pack(anchor="w", fill="x", pady=2)
-        ttk.Button(left, text="Thử đọc tất cả vùng (OCR)", command=self.test_all).pack(fill="x", pady=(6, 2))
-        btns = ttk.Frame(left)
-        btns.pack(fill="x")
-        btns.columnconfigure(0, weight=1)
-        btns.columnconfigure(1, weight=1)
-        ttk.Button(btns, text="Lưu", command=self.save).grid(row=0, column=0, sticky="we", padx=(0, 2), pady=2)
-        ttk.Button(btns, text="Lưu thành profile mới…", command=self.save_as).grid(row=0, column=1, sticky="we",
-                                                                                pady=2)
-        ttk.Button(btns, text="Khôi phục toạ độ mặc định", command=self.reset).grid(row=1, column=0, columnspan=2,
-                                                                                  sticky="we", pady=2)
-        ttk.Label(left, text="Mẹo: căn lúc đang chuẩn bị (thấy cửa hàng, số vàng). "
-                             "Mỗi độ phân giải nên có 1 profile riêng.",
-                  style="Hint.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
-
         right = ttk.Frame(top, padding=8)
         right.pack(side="left", fill="both", expand=True)
         self.cv = tk.Canvas(right, width=self.CW, height=self.CH, bg="#111", highlightthickness=0, cursor="crosshair")
@@ -649,8 +652,13 @@ class CalibrateWindow:
         self.refresh_list()
         self.lst.selection_set(0)
         self.on_select()
-        fit(top, self.CW + 360, self.CH + 90)
+        fit(top, self.CW + 360, self.win_h())
         self.load_frame()
+
+    def win_h(self):
+        """Màn hình thấp: dùng hết chiều cao cho phép ngay từ đầu (mô tả từng mục dài ngắn khác nhau)."""
+        sh = self.top.winfo_screenheight()
+        return self.CH + 90 if sh >= 900 else max(self.CH + 90, sh - 80)
 
     # ----------------------------------------------------------- khung hình
     def seek(self, d):
@@ -681,7 +689,7 @@ class CalibrateWindow:
         self.redraw()
         self.update_zoom()
         if first:
-            fit(self.top, self.CW + 360, self.CH + 90)     # ảnh phóng to đã có → đo lại cỡ cửa sổ
+            fit(self.top, self.CW + 360, self.win_h())     # ảnh phóng to đã có → đo lại cỡ cửa sổ
 
     def redraw(self):
         c = self.cv
@@ -778,7 +786,7 @@ class CalibrateWindow:
             try:
                 c = self.L.crop(frame, self.prof["boxes"][sel])
                 if sel in ("traits", "players"):
-                    txt = "→ " + panel_text(sel, c, lang)
+                    txt = "→ " + panel_text(sel, c, lang, self.info.get("h"))
                 else:
                     raw, val = ocr.read_field(c, sel, self.L.FIELDS[sel][1], lang)
                     txt = f"đọc thô: {raw!r}\n→ hiểu là: {val!r}"
@@ -800,7 +808,7 @@ class CalibrateWindow:
                 try:
                     c = self.L.crop(frame, self.prof["boxes"][k])
                     if k in ("traits", "players"):
-                        v = panel_text(k, c, lang)
+                        v = panel_text(k, c, lang, self.info.get("h"))
                     else:
                         _, v = ocr.read_field(c, k, self.L.FIELDS[k][1], lang)
                 except Exception as ex:  # noqa: BLE001

@@ -154,6 +154,17 @@ def script(root, video, result):
             problems.append("Căn chỉnh vùng: không tải được khung hình")
         on_ui(root, lambda: check_fit(cal.top, "Căn chỉnh vùng"))
         shot("03_can_chinh.png")
+        # chọn lần lượt TỪNG mục: mô tả dài không được đẩy nút ra ngoài cửa sổ
+        for i, k in enumerate(cal.keys):
+            def sel(i=i):
+                cal.lst.selection_clear(0, "end")
+                cal.lst.selection_set(i)
+                cal.on_select()
+            on_ui(root, sel)
+            pump(root, 0.6)
+            on_ui(root, lambda k=k: check_fit(cal.top, f"Căn chỉnh vùng (chọn {k})"))
+        shot("03b_chon_players.png")
+        on_ui(root, lambda: (cal.lst.selection_clear(0, "end"), cal.lst.selection_set(0), cal.on_select()))
         on_ui(root, cal.test_all)
         t0 = time.time()
         items = []

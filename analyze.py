@@ -86,9 +86,11 @@ def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end
             v = e[key]
             if v is SAME:
                 s[key], s[key + "_raw"] = prev.get(key), prev.get(key + "_raw", "")
+                s[key + "_fresh"] = False          # chép lại lần đọc trước, không phải 1 lần OCR mới
             else:
                 raw, val = v.result()
                 s[key], s[key + "_raw"] = val, raw
+                s[key + "_fresh"] = True
                 prev[key], prev[key + "_raw"] = val, raw
         samples.append(s)
     return samples
@@ -147,14 +149,17 @@ def snap_shop_names(samples, fps):
             s[k] = snap(s.get(k))
 
 
-def stabilize(vals, confirm=2, order=None, back_confirm=None):
-    """Chỉ nhận giá trị mới khi nó lặp lại `confirm` lần liên tiếp; khi nhận thì ghi lùi về mẫu ĐẦU TIÊN
-    đọc ra giá trị đó (để mọi chuỗi vòng / vàng / XP đổi cùng một mốc, không lệch nhau 1–2 mẫu).
-    order(v)→số: giá trị đi lùi (vd. vòng nhỏ hơn) chỉ được nhận khi lặp lại lâu hơn (`back_confirm` lần) —
-    sửa được trường hợp đọc nhầm ra vòng lớn hơn rồi kẹt ở đó; nếu giá trị sai chỉ giữ một lúc ngắn
-    thì xoá luôn đoạn sai đó."""
-    back_confirm = back_confirm or max(confirm + 2, 5)
-    out, cur, cur_start, cand, n, cand_start = [], None, 0, None, 0, 0
+def stabilize(vals, confirm=2, order=None, back_confirm=3, fresh=None, allow_back=True):
+    """Chỉ nhận giá trị mới khi nó được OCR ra `confirm` lần ĐỘC LẬP (fresh[i] = True: mẫu thật sự được OCR,
+    không phải chép lại do hình không đổi); khi nhận thì ghi lùi về mẫu đầu tiên đọc ra giá trị đó (để vòng /
+    vàng / XP đổi cùng một mốc).
+    order(v)→số: giá trị đi lùi (vòng nhỏ hơn) bị bỏ qua, TRỪ khi allow_back và đó đúng là giá trị ngay trước
+    (hoàn tác: 3-1 → đọc nhầm 3-7 → 3-1) và được OCR ra `back_confirm` lần độc lập. Khi hoàn tác, đoạn giá trị
+    sai được trả về giá trị đúng. Không bao giờ lùi về giá trị tuỳ ý (4-1 → 1-1)."""
+    if fresh is None:
+        fresh = [True] * len(vals)
+    out, cur, cur_start, prev_val = [], None, 0, None
+    cand, n, cand_start = None, 0, 0
     for i, v in enumerate(vals):
         if v is None:
             out.append(cur)
@@ -162,18 +167,22 @@ def stabilize(vals, confirm=2, order=None, back_confirm=None):
         if v == cur:
             cand, n = None, 0
         elif v == cand:
-            n += 1
+            n += 1 if fresh[i] else 0
         else:
             cand, n, cand_start = v, 1, i
         if cand is not None:
             back = cur is not None and order is not None and order(cand) < order(cur)
-            if n >= (back_confirm if back else confirm):
-                start = cand_start
-                if back and cand_start - cur_start <= 6 * back_confirm:
-                    start = cur_start              # giá trị "lớn hơn" chỉ thoáng qua → coi là đọc nhầm
+            if back and not (allow_back and cand == prev_val):
+                pass                                   # lùi về giá trị lạ → bỏ qua (đọc sai)
+            elif n >= (back_confirm if back else confirm):
+                start = cur_start if back else cand_start
                 for k in range(start, i):
                     out[k] = cand
-                cur, cur_start, cand, n = cand, start, None, 0
+                if back:
+                    cur, cur_start, prev_val = cand, start, None
+                else:
+                    cur, cur_start, prev_val = cand, cand_start, cur
+                cand, n = None, 0
         out.append(cur)
     return out
 
@@ -181,18 +190,50 @@ def stabilize(vals, confirm=2, order=None, back_confirm=None):
 def clean(samples, fps):
     snap_shop_names(samples, fps)
     conf = 2 if fps <= 3 else 3
+
+    def fr(k):
+        return [s.get(k + "_fresh", True) for s in samples]
     series = {
-        "round": stabilize([s["round"] for s in samples], conf + 1, round_key),
-        "gold": stabilize([s["gold"] for s in samples], conf),
-        "level": stabilize([s["level"] for s in samples], conf + 1, int),
-        "xp": stabilize([s["xp"] for s in samples], conf),
+        "round": stabilize([s["round"] for s in samples], conf, round_key, fresh=fr("round")),
+        "gold": stabilize([s["gold"] for s in samples], conf, fresh=fr("gold")),
+        # cấp TFT không bao giờ giảm → không cho lùi
+        "level": stabilize([s["level"] for s in samples], conf, int, fresh=fr("level"), allow_back=False),
+        "xp": stabilize([s["xp"] for s in samples], conf, fresh=fr("xp")),
     }
     shop = []
     for s in samples:
         names = tuple(s.get(k) or "" for k in layout.SHOP)
         shop.append(None if not any(names) else names)     # cả 5 ô trống = cửa hàng đang ẩn
-    series["shop"] = stabilize(shop, conf)
+    series["shop"] = stabilize(shop, conf, fresh=[any(s.get(k + "_fresh", True) for k in layout.SHOP)
+                                                   for s in samples])
+    series["gold"] = drop_gold_blips(series, samples, fps)
     return series
+
+
+def drop_gold_blips(S, samples, fps, max_sec=6.0):
+    """Vàng nhảy LÊN rồi tụt xuống trong <= max_sec giây mà cửa hàng / XP / cấp không đổi gì → đọc sai
+    (vd. 10 đọc thành 16 suốt vài giây ở video nén). Thay đoạn đó bằng giá trị sau."""
+    g = list(S["gold"])
+    n = len(g)
+    segs, i = [], 0
+    while i < n:
+        j = i
+        while j + 1 < n and g[j + 1] == g[i]:
+            j += 1
+        segs.append((i, j))
+        i = j + 1
+    for k in range(1, len(segs) - 1):
+        (_, a1), (b0, b1), (c0, _) = segs[k - 1], segs[k], segs[k + 1]
+        va, vb, vc = g[a1], g[b0], g[c0]
+        if None in (va, vb, vc) or not (vb > vc and vb > va):
+            continue
+        if samples[b1]["t"] - samples[b0]["t"] + 1.0 / fps > max_sec:
+            continue
+        if any(S[key][c0] != S[key][b1] for key in ("shop", "xp", "level")):
+            continue                     # có thứ khác đổi đúng lúc vàng giảm → có thể là tiêu thật
+        for x in range(b0, b1 + 1):
+            g[x] = vc
+    return g
 
 
 def quality(samples):
@@ -367,12 +408,7 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
         r["keyframe_t"] = round(t, 1)
         r["traits_raw"] = ocr.read_traits(layout.crop(frame, prof["boxes"]["traits"]), lang)
         r["traits"] = ocr.parse_traits(r["traits_raw"])
-        r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name)
-        if r["players_panel"] in ("ok", "uncertain") and info["h"] and info["h"] < 900:
-            # video dưới 1080p: số máu người khác chỉ cao ~5px → hay đọc sai mà vẫn đúng thứ tự → không khẳng định
-            r["players_panel"] = "low_res"
-        if r["players_panel"] == "low_res":
-            r["players"] = [p for p in r["players"] if p["me"]]     # máu người khác: để trống, không đoán
+        r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name, info["h"])
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
         r["hp_others"] = [p["hp"] for p in r["players"] if not p["me"]]
@@ -381,9 +417,9 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
         on_progress(0.85 + 0.1 * (idx + 1) / max(1, len(rounds)))
 
 
-def read_players_vote(frames, prof, lang, player_name=""):
+def read_players_vote(frames, prof, lang, player_name="", src_h=None):
     """Đọc cột máu trên vài khung hình, lấy theo đa số từng dòng (hoà → khung đầu tiên)."""
-    reads = [ocr.read_players(layout.crop(f, prof["boxes"]["players"]), lang, player_name) for f in frames]
+    reads = [ocr.read_players(layout.crop(f, prof["boxes"]["players"]), lang, player_name, src_h) for f in frames]
     base, status = reads[0]
     if len(reads) == 1:
         return base, status

@@ -3,7 +3,7 @@
 Ngưỡng chọn theo số đo thật (xem báo cáo vòng 2), không phải mong muốn:
 - Số HUD 12/12, cửa hàng >= 14/15, máu mình 3/3, hud_2-7 không bao giờ trả máu người khác "ok": mọi biến thể.
 - Tộc/hệ: tên và số đếm >= 22/25, rác <= 2 dòng/ảnh: mọi biến thể (thấp nhất đo được: 720p+JPEG60 = 22).
-- Máu người khác: ở 720p hoặc khoanh lệch sang PHẢI 2–3px, chữ số quá nhoè / bị cắt → không đọc đúng được,
+- Máu người khác: ở video < 1000px cao (720p, 900p) chỉ trả máu của bạn, trạng thái "low_res"; khoanh lệch sang PHẢI 2–3px, chữ số quá nhoè / bị cắt → không đọc đúng được,
   nhưng KHÔNG được báo "ok" (phải là uncertain/unknown). Các biến thể còn lại: >= 13/14 và trạng thái "ok".
   Mọi biến thể: số giá trị sai mà vẫn "ok" <= 1 (một lần đọc nhầm vẫn đúng thứ tự giảm dần, vd 68→64,
   thì không có cách phát hiện).
@@ -15,12 +15,12 @@ import pytest
 
 import layout
 import ocr
-from variants import variant
+from variants import src_height, variant
 
 B = layout.DEFAULT["boxes"]
 FILES = ["hud_2-7.png", "hud_3-5_a.png", "hud_3-5_b.png"]
 HP_OK = {"orig": 14, "jpeg60": 13, "shift0_2": 14, "shift-2_0": 13, "shift-3_0": 13, "shift-2_-2": 13}
-HP_SAFE_ONLY = ["720", "720jpeg60", "shift2_0", "shift3_3"]
+HP_SAFE_ONLY = ["720", "900", "720jpeg60", "shift2_0", "shift3_3"]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -62,7 +62,7 @@ def test_variant(v, real_frames, truth):
             if t["shop"][i] == "":
                 assert not val, (f, key, val)
             shop += ocr.norm(val or "") == ocr.norm(t["shop"][i])
-        players, st = ocr.read_players(layout.crop(img, B["players"]), "auto")
+        players, st = ocr.read_players(layout.crop(img, B["players"]), "auto", src_h=src_height(v))
         mine = [p["hp"] for p in players if p["me"]]
         others = [p["hp"] for p in players if not p["me"]]
         me += mine[:1] == [t["hp_me"]]

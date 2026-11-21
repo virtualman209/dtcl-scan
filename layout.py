@@ -23,8 +23,8 @@ FIELDS = {
     "shop5":   ("Cửa hàng ô 5 – tên tướng / Wisp", "name", "Ô ngoài cùng bên phải (có thể là Wisp)"),
     "traits":  ("Bảng tộc/hệ (trái)", "block", "Danh sách tộc/hệ đang kích hoạt bên trái"),
     "players": ("Cột máu người chơi (phải)", "block",
-                "Khoanh hẹp: từ mép trái số máu TO của bạn tới mép phải ô máu nhỏ của người khác. "
-                "KHÔNG lấy tên, KHÔNG lấy ảnh đại diện. Từ người trên cùng tới người dưới cùng."),
+                "Khoanh hẹp từ số máu TO của bạn tới mép phải ô máu nhỏ, từ người trên cùng tới dưới cùng. "
+                "Không lấy tên, ảnh đại diện."),
 }
 SAMPLE_FIELDS = ["round", "gold", "level", "xp", "shop1", "shop2", "shop3", "shop4", "shop5"]
 BLOCK_FIELDS = ["traits", "players"]

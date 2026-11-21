@@ -58,7 +58,7 @@ Có thể điền tên tướng của mùa hiện tại vào `champions.txt` đ�
 - Mua / roll quá nhanh trong chưa đầy 0,5 giây có thể bị gộp. Tăng *Số khung/giây đọc* lên 3–4 nếu cần.
 - Không có AI thì tool **không nhận diện được tướng trên bàn cờ** (chỉ đọc chữ). Bật *AI đọc bàn cờ* nếu cần đội hình chi tiết.
 - Giá từng tướng được suy từ lượng vàng giảm, nên có thể lệch khi mua nhiều thứ cùng lúc.
-- Máu người khác (số nhỏ ở cột bên phải) chỉ đọc được ở video 1080p trở lên. Video thấp hơn hoặc vùng khoanh lệch: tool để trống / ghi trạng thái `uncertain`, `low_res` thay vì đoán (máu của bạn vẫn đọc được).
+- Máu người khác (số nhỏ ở cột bên phải) chỉ đọc ở video cao từ 1000px (1080p) trở lên. Video 720p/900p: trạng thái `low_res`, để trống; vùng khoanh lệch: `uncertain`. Máu của bạn vẫn đọc được. Hạng theo máu chỉ là ước lượng.
 
 ## Dòng lệnh
 
