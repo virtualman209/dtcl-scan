@@ -103,10 +103,9 @@ def test_version():
     t = _bytes("version.txt")
     assert t.count(b"\n") == t.count(b"\r\n")
     lines = t.decode("utf-8").splitlines()
-    assert lines[0].strip() == "1.4.0"
-    assert len([ln for ln in lines[1:] if ln.strip()]) >= 2
     import updater
-    assert updater._vtuple("1.4.0") > updater._vtuple("1.3.0")
+    assert updater._vtuple(lines[0].strip()) > updater._vtuple("1.3.0")
+    assert len([ln for ln in lines[1:] if ln.strip()]) >= 2
 
 
 def test_updater_keeps_user_files(tmp_path, monkeypatch):
@@ -135,7 +134,7 @@ def test_updater_keeps_user_files(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "STATE", str(app / "update_state.json"))
     monkeypatch.setattr(updater, "_get", lambda url, timeout=6: buf.getvalue())
     v = updater._apply_update_python()
-    assert v == "1.4.0"
+    assert v == _bytes("version.txt").decode("utf-8").splitlines()[0].strip()
     assert (app / "profiles" / "cua_toi.json").exists()
     assert not (app / "profiles" / "default_1080p.json").exists()
     assert "Tôi" in (app / "settings.json").read_text(encoding="utf-8")

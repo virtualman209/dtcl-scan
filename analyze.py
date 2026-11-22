@@ -547,6 +547,8 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
             s[k + "_clean"] = S[k][i]
     events = derive_events(samples, S, fps)
     rounds = summarize_rounds(samples, S, events, info["duration"])
+    import composition
+    composition.estimate(rounds, events)             # đội hình + sao ước lượng từ lịch sử mua
     log(f"Tìm thấy {len(rounds)} vòng, {len(events)} sự kiện.")
 
     warnings = []
@@ -599,7 +601,7 @@ def run_analysis(video, opts, on_progress=lambda p: None, log=print, cancel=None
     write_csv(os.path.join(out, "events.csv"), events, ["time", "t", "round", "type", "detail", "gold", "gold_after"])
     write_csv(os.path.join(out, "rounds.csv"), rounds,
               ["round", "time", "duration", "level", "xp", "hp", "rank_hp", "hp_others", "players_panel", "gold_start", "gold_end", "gold_max", "spent",
-               "rolls", "xp_buys", "bought", "level_up", "keyframe"])
+               "rolls", "xp_buys", "bought", "board_est_str", "sold_maybe", "level_up", "keyframe"])
     if opts.get("chat_pack", True) and any(r.get("keyframe") for r in rounds):
         import chatpack
         pack, n_img = chatpack.write(out, rounds, match["summary"])
@@ -628,6 +630,7 @@ def summary(rounds, events):
         "total_xp_buys": sum(r["xp_buys"] for r in rounds),
         "units_bought": sum(len(r["bought"]) for r in rounds),
         "max_gold": max((r["gold_max"] for r in rounds if r.get("gold_max") is not None), default=None),
+        "final_board_est": __import__("composition").final(rounds),
     }
 
 

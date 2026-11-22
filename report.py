@@ -61,7 +61,10 @@ def board_html(r):
     if r.get("ai_error"):
         return f'<div class="ai">AI lỗi: {e(r["ai_error"])}</div>'
     tr = ", ".join(f"{e(t['trait'])} {t['count']}" for t in r.get("traits") or [])
-    return f'<div class="ai sub">{tr}</div>' if tr else ""
+    out = f'<div class="ai sub">{tr}</div>' if tr else ""
+    if r.get("board_est_str"):
+        out += f'<div class="ai">🧩 Đội hình ước lượng: {e(r["board_est_str"])}</div>'
+    return out
 
 
 def write(out_dir, m):
@@ -92,6 +95,16 @@ def write(out_dir, m):
                      f"nội dung <b>cau_hoi.txt</b>.</div>")
     if m.get("ai_notes"):
         parts.append(f"<h2>Nhận xét của AI</h2><div class='notes'>{e(m['ai_notes'])}</div>")
+    fb = s.get("final_board_est")
+    if fb and fb.get("units"):
+        units = " · ".join(f"<b>{e(u['name'])}</b> {'★' * u['stars']} <span class='sub'>({u['copies']} bản)</span>"
+                           for u in fb["units"])
+        parts.append(f"<h2>Đội hình cuối (ước lượng từ lịch sử mua, vòng {e(fb['round'])})</h2>"
+                     f"<div class='notes' style='white-space:normal'>{units}<br><span class='sub'>Ước lượng: cộng dồn "
+                     f"số lần mua mỗi tướng (3 bản = ★★, 9 bản = ★★★). Không tính tướng từ băng chuyền / lõi; "
+                     f"tướng đã bán vẫn bị tính"
+                     + (" — trận này có dấu hiệu đã bán tướng." if fb.get("sold_maybe") else ".")
+                     + " Muốn biết chính xác tướng trên bàn: dùng gói gửi Claude chat.</span></div>")
     parts.append(gold_chart(m["rounds"]))
     parts.append("<h2>Từng vòng</h2><table><tr><th>Vòng</th><th>Lúc</th><th>Cấp</th><th>XP</th><th>Máu (hạng)</th>"
                  "<th>Vàng đầu→cuối</th><th>Tiêu</th><th>Roll</th><th>Mua XP</th><th>Mua tướng / sự kiện</th>"

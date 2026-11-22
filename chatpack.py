@@ -20,7 +20,7 @@ Chỗ nào dữ liệu thiếu hoặc mâu thuẫn thì nói thẳng, đừng đ
 
 Tổng kết: {summary}
 
-Bảng từng vòng: vòng | lúc | cấp | XP | máu | vàng đầu→cuối | tiêu | roll | mua XP | tướng đã mua | tộc/hệ đọc được
+Bảng từng vòng: vòng | lúc | cấp | XP | máu | vàng đầu→cuối | tiêu | roll | mua XP | tướng đã mua | tộc/hệ đọc được | đội hình ước lượng từ lịch sử mua (3 bản = 2★)
 {table}
 """
 
@@ -32,7 +32,8 @@ def _table(rounds):
         rows.append(" | ".join(str(x) for x in (
             r["round"], r.get("time", ""), r.get("level") or "?", r.get("xp") or "?",
             (f"{r['hp']} (#{r['rank_hp']})" if r.get("rank_hp") else r.get("hp")) if r.get("hp") is not None else "?", f"{r.get('gold_start')}→{r.get('gold_end')}",
-            r["spent"], r["rolls"], r["xp_buys"], ", ".join(r["bought"]) or "-", tr)))
+            r["spent"], r["rolls"], r["xp_buys"], ", ".join(r["bought"]) or "-", tr,
+            r.get("board_est_str") or "-")))
     return "\n".join(rows)
 
 

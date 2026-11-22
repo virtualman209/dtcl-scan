@@ -16,6 +16,7 @@ vòng mấy, bao nhiêu vàng, lên cấp lúc nào, mua XP mấy lần, roll m�
 | `match.json` | Toàn bộ dữ liệu, để đưa cho AI hoặc script khác |
 | `keyframes\` | Ảnh chốt giai đoạn chuẩn bị của mỗi vòng |
 
+- **Đội hình + sao ước lượng** (không cần AI): cộng dồn số lần mua mỗi tướng (3 bản = ★★, 9 bản = ★★★). Không tính tướng từ băng chuyền / lõi, tướng đã bán vẫn bị tính, và không biết tướng nào đang đứng trên bàn — muốn chính xác thì dùng **gói gửi Claude chat** (thư mục `gui_claude`).
 - **Tuỳ chọn AI** (cần Claude API key của bạn, có tính phí): Claude đọc ảnh chốt để nhận diện bàn cờ, sao, trang bị; và viết nhận xét cả trận bằng tiếng Việt.
 - **Tự cập nhật** từ GitHub (hỏi trước khi cập nhật).
 

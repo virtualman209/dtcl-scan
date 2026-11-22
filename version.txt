@@ -1,5 +1,4 @@
-1.4.1
-- SỬA LỖI NẶNG trên Windows: không đọc được tên tướng / tộc hệ (cửa hàng 0%) do thư mục tessdata riêng thiếu cấu hình tsv — tự tạo khi chạy
-- Profile căn chỉnh từ bản cũ: vùng vàng dính icon đồng xu (53 thành 253), vùng cấp cắt "Cấp 10" thành 1, vùng máu kiểu cũ → tự chuyển sang vùng mới
-- Máu: dò ô máu theo độ tối so với nền (video thật nền tối), tìm số máu to của bạn ở mọi vị trí
-- Thêm kiểm thử bằng khung hình từ video thật của người dùng
+1.5.0
+- MỚI: Đội hình + sao ước lượng từ lịch sử mua (3 bản = ★★, 9 bản = ★★★) trong báo cáo, rounds.csv và gói gửi Claude chat
+- Lưu ý: không tính tướng từ băng chuyền / lõi; tướng đã bán vẫn bị tính. Tên + sao chính xác trên bàn cờ: dùng gói gửi Claude chat
+- Sửa test phiên bản
