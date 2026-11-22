@@ -556,8 +556,7 @@ def panel_text(key, crop, lang, src_h=None):
     pl, st = ocr.read_players(crop, lang, src_h=src_h)
     txt = ", ".join(("BẠN " if p["me"] else "") + str(p["hp"]) for p in pl)
     if st == "low_res":
-        txt += (f"  (video {src_h}p — dưới 1080p: chữ số máu người khác quá nhỏ, không đọc được; "
-                "chỉ đọc máu của bạn. Quay video 1080p để có máu người khác)")
+        txt += f"  (HUD ~{src_h}p < 1080p: chỉ đọc được máu của bạn)"
     elif st == "uncertain":
         txt += "  (có dòng đọc sai thứ tự máu giảm dần nên đã bỏ — nên khoanh lại cho sát cột số máu)"
     elif st != "ok":
@@ -786,7 +785,7 @@ class CalibrateWindow:
             try:
                 c = self.L.crop(frame, self.prof["boxes"][sel])
                 if sel in ("traits", "players"):
-                    txt = "→ " + panel_text(sel, c, lang, self.info.get("h"))
+                    txt = "→ " + panel_text(sel, c, lang, self.L.effective_height(self.prof, self.info.get("h")))
                 else:
                     raw, val = ocr.read_field(c, sel, self.L.FIELDS[sel][1], lang)
                     txt = f"đọc thô: {raw!r}\n→ hiểu là: {val!r}"
@@ -808,7 +807,7 @@ class CalibrateWindow:
                 try:
                     c = self.L.crop(frame, self.prof["boxes"][k])
                     if k in ("traits", "players"):
-                        v = panel_text(k, c, lang, self.info.get("h"))
+                        v = panel_text(k, c, lang, self.L.effective_height(self.prof, self.info.get("h")))
                     else:
                         _, v = ocr.read_field(c, k, self.L.FIELDS[k][1], lang)
                 except Exception as ex:  # noqa: BLE001

@@ -134,3 +134,26 @@ def test_low_res_hp_not_claimed(workdir, w, h, crf):
     assert r["players_panel"] == "low_res"
     assert r.get("rank_hp") is None
     assert r["hp_others"] == []
+
+
+def test_window_capture_small_hud(workdir, tmp_path, monkeypatch):
+    """Video 1080p nhưng quay cửa sổ game 1280x720 giữa nền đen, profile khoanh đúng: máu của bạn đúng,
+    máu người khác không khẳng định (HUD hiệu dụng ~720p)."""
+    import json as _json
+    import core
+    import layout
+    from conftest import REAL, run_analysis_quiet
+    monkeypatch.setattr(core, "PROFILE_DIR", str(tmp_path / "profiles"))
+    p = _json.loads(_json.dumps(layout.DEFAULT))
+    p.update(name="cua_so", calibrated=True)
+    for k, (x1, y1, x2, y2) in p["boxes"].items():
+        p["boxes"][k] = [(320 + x1 * 1280) / 1920, (180 + y1 * 720) / 1080,
+                         (320 + x2 * 1280) / 1920, (180 + y2 * 720) / 1080]
+    layout.save(p)
+    src = os.path.join(workdir, "cửa sổ nhỏ.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-loop", "1", "-t", "20", "-framerate", "10",
+                    "-i", os.path.join(REAL, "hud_3-5_a.png"), "-vf", "scale=1280:720,pad=1920:1080:320:180:black",
+                    "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", src], check=True)
+    r = run_analysis_quiet(src, profile="cua_so", chat_pack=False)["match"]["rounds"][0]
+    assert (r["round"], r["gold_end"], r["level"], r["hp"]) == ("3-5", 43, 7, 87)
+    assert r["players_panel"] == "low_res" and r["hp_others"] == [] and r.get("rank_hp") is None

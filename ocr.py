@@ -413,6 +413,9 @@ def read_players(crop_img, lang="eng", player_name="", src_h=None):
     if crop_img is None or crop_img.size == 0:
         return [], "empty"
     H, W = crop_img.shape[:2]
+    # tỉ lệ cỡ HUD so với vùng mặc định (652px cao ở khung 1920): quay cửa sổ game nhỏ → vùng khoanh nhỏ hơn,
+    # mọi kích thước dòng / chữ số nhỏ theo
+    k = min(1.0, max(0.4, H / 652.0)) if H > 200 else 1.0
     g = whiteness(crop_img).astype(np.float32)
     c0, c1 = PL_CFG["cols"]
     # dòng = dải ô tối (trung vị độ trắng theo hàng ngang thấp)
@@ -426,18 +429,18 @@ def read_players(crop_img, lang="eng", player_name="", src_h=None):
         if v is not None and c >= 0.65:
             out.append({"y": int(y0), "hp": v, "me": False, "conf": round(c, 2), "raw": txt})
 
-    for y0, y1 in _dark_runs(prof < PL_CFG["dark"], 28, PL_CFG["close"]):
+    for y0, y1 in _dark_runs(prof < PL_CFG["dark"], int(28 * k), max(3, int(round(PL_CFG["close"] * k)))):
         L = y1 - y0
-        if L <= 62:
+        if L <= 62 * k:
             other(y0, y1)
             continue
         # khối dài = dòng của bạn (phóng to), có thể dính với dòng ngay dưới
-        top = min(L, 78)
-        txt, v, c = read_digits(crop_img[y0:y0 + top, int(0.1 * W):int(0.58 * W)], scale=4, min_h=13)
+        top = min(L, int(78 * k))
+        txt, v, c = read_digits(crop_img[y0:y0 + top, int(0.1 * W):int(0.58 * W)], scale=4 / k, min_h=13 * k)
         if v is not None and c >= 0.75:
             out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
-        if L - top >= 28:
-            other(y1 - 44, y1)
+        if L - top >= 28 * k:
+            other(y1 - int(44 * k), y1)
     if src_h and src_h < MIN_SRC_H_OTHERS:
         return [r for r in out if r["me"]], "low_res"
     out, dropped = _keep_descending(out)

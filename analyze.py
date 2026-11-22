@@ -57,9 +57,13 @@ def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end
                     e[key] = SAME
                     continue
                 last_read[key] = t     # số: hình không đổi vẫn đọc lại mỗi REREAD_SEC giây → lần đọc sai không "dính" mãi
-                # vừa đổi → khung sau đọc lại 1 lần nữa dù trông giống (khung chuyển cảnh / nén có thể đọc sai,
-                # nếu không đọc lại thì giá trị sai bị giữ suốt tới lần đổi sau)
-                recheck[key] = prev is None or np.abs(small - prev).mean() >= 2.0
+                # loại lần đọc: 'new' = hình vừa đổi; 'recheck' = khung ngay sau khi đổi (gần như cùng hình);
+                # 'reread' = đọc lại định kỳ trên hình KHÔNG đổi. OCR trên cùng 1 hình gần như tất định, nên chỉ
+                # 'new' và 'reread' (cách nhau >= REREAD_SEC) mới tính là bằng chứng độc lập.
+                changed = prev is None or np.abs(small - prev).mean() >= 2.0
+                e[key + "_kind"] = "new" if changed else ("recheck" if recheck.get(key) else "reread")
+                # vừa đổi → khung sau đọc lại 1 lần nữa dù trông giống (khung chuyển cảnh / nén có thể đọc sai)
+                recheck[key] = changed
                 last_small[key] = small
                 ftype = layout.FIELDS[key][1]
                 fut = pool.submit(ocr.read_field, c.copy(), key, ftype, lang)
@@ -86,11 +90,11 @@ def sample_video(info, prof, fps, lang, on_progress, cancel, log, start=0.0, end
             v = e[key]
             if v is SAME:
                 s[key], s[key + "_raw"] = prev.get(key), prev.get(key + "_raw", "")
-                s[key + "_fresh"] = False          # chép lại lần đọc trước, không phải 1 lần OCR mới
+                s[key + "_kind"] = "same"          # chép lại lần đọc trước, không phải 1 lần OCR mới
             else:
                 raw, val = v.result()
                 s[key], s[key + "_raw"] = val, raw
-                s[key + "_fresh"] = True
+                s[key + "_kind"] = e.get(key + "_kind", "new")
                 prev[key], prev[key + "_raw"] = val, raw
         samples.append(s)
     return samples
@@ -149,70 +153,100 @@ def snap_shop_names(samples, fps):
             s[k] = snap(s.get(k))
 
 
-def stabilize(vals, confirm=2, order=None, back_confirm=3, fresh=None, allow_back=True):
-    """Chỉ nhận giá trị mới khi nó được OCR ra `confirm` lần ĐỘC LẬP (fresh[i] = True: mẫu thật sự được OCR,
-    không phải chép lại do hình không đổi); khi nhận thì ghi lùi về mẫu đầu tiên đọc ra giá trị đó (để vòng /
-    vàng / XP đổi cùng một mốc).
-    order(v)→số: giá trị đi lùi (vòng nhỏ hơn) bị bỏ qua, TRỪ khi allow_back và đó đúng là giá trị ngay trước
-    (hoàn tác: 3-1 → đọc nhầm 3-7 → 3-1) và được OCR ra `back_confirm` lần độc lập. Khi hoàn tác, đoạn giá trị
-    sai được trả về giá trị đúng. Không bao giờ lùi về giá trị tuỳ ý (4-1 → 1-1)."""
-    if fresh is None:
-        fresh = [True] * len(vals)
-    out, cur, cur_start, prev_val = [], None, 0, None
-    cand, n, cand_start = None, 0, 0
+EVIDENCE = ("new", "reread")
+
+
+def stabilize(vals, confirm=2, kinds=None, plausible=None):
+    """Chỉ nhận giá trị mới khi nó lặp lại `confirm` mẫu liên tiếp (như bản 1.4 vòng 2), rồi ghi lùi về mẫu đầu
+    tiên lệch khỏi giá trị cũ (vòng / vàng / XP đổi cùng một mốc).
+    kinds[i]: 'new' | 'recheck' | 'reread' | 'same' (xem sample_video). plausible(cur, cand) → bước đổi hợp lý
+    (vòng kế tiếp, cấp +1/+2). Bước đổi KHÔNG hợp lý (nhảy vòng, đi lùi) cần >= 2 lần đọc độc lập ('new' /
+    'reread' — đọc lại trên cùng hình không tính), trừ khi là hoàn tác về đúng giá trị ngay trước.
+    Sửa sai: giá trị mới xuất hiện ở lần đọc lại định kỳ (hình KHÔNG đổi) trong khi giá trị hiện tại mới chỉ có
+    1 bằng chứng → giá trị hiện tại là đọc nhầm, thay cả đoạn của nó."""
+    n_all = len(vals)
+    kinds = kinds or ["new"] * n_all
+    out = []
+    cur, cur_start, cur_ev, prev_val, pend_start = None, 0, 0, None, None
+    last_new_is_cur = False          # lần đọc 'new' gần nhất (hình đổi gần nhất) có ra giá trị hiện tại không
+    cand, n, cand_start, ev, cand_kind = None, 0, 0, 0, None
     for i, v in enumerate(vals):
+        k = kinds[i]
         if v is None:
             out.append(cur)
             continue
+        if k == "new":
+            last_new_is_cur = v == cur
         if v == cur:
-            cand, n = None, 0
-        elif v == cand:
-            n += 1 if fresh[i] else 0
+            cand, n, pend_start = None, 0, None
+            cur_ev += k in EVIDENCE
+            out.append(cur)
+            continue
+        if pend_start is None:
+            pend_start = i
+        if v == cand:
+            n += 1
+            ev += k in EVIDENCE
         else:
-            cand, n, cand_start = v, 1, i
-        if cand is not None:
-            back = cur is not None and order is not None and order(cand) < order(cur)
-            if back and not (allow_back and cand == prev_val):
-                pass                                   # lùi về giá trị lạ → bỏ qua (đọc sai)
-            elif n >= (back_confirm if back else confirm):
-                start = cur_start if back else cand_start
-                for k in range(start, i):
-                    out[k] = cand
-                if back:
-                    cur, cur_start, prev_val = cand, start, None
-                else:
-                    cur, cur_start, prev_val = cand, cand_start, cur
-                cand, n = None, 0
+            cand, n, cand_start, ev, cand_kind = v, 1, i, int(k in EVIDENCE), k
+        # hoàn tác (chỉ cho vòng / cấp — có luật hợp lý): quay về đúng giá trị ngay trước = giá trị vừa nhận là đọc nhầm
+        undo = plausible is not None and cur is not None and cand == prev_val
+        ok = cur is None or plausible is None or undo or plausible(cur, cand)
+        if n >= confirm and (ok or ev >= 2):
+            # đọc lại trên CÙNG hình đã cho ra giá trị hiện tại mà nay ra giá trị khác → giá trị hiện tại là đọc nhầm
+            fix = cur is not None and (undo or (cand_kind == "reread" and cur_ev <= 1 and last_new_is_cur))
+            start = cur_start if fix else (cand_start if cur is None else pend_start)
+            for x in range(start, i):
+                out[x] = cand
+            prev_val = None if fix else cur
+            cur, cur_start, cur_ev = cand, start, ev
+            last_new_is_cur = last_new_is_cur or cand_kind == "new"
+            cand, n, pend_start = None, 0, None
         out.append(cur)
     return out
+
+
+def next_round_ok(cur, cand):
+    """Vòng chỉ tiến tới vòng kế tiếp trong stage, hoặc vòng đầu của stage sau."""
+    try:
+        s1, r1 = map(int, cur.split("-"))
+        s2, r2 = map(int, cand.split("-"))
+    except (ValueError, AttributeError):
+        return False
+    return (s2 == s1 and r2 == r1 + 1) or (s2 == s1 + 1 and r2 == 1)
+
+
+def level_step_ok(cur, cand):
+    return 1 <= cand - cur <= 2
 
 
 def clean(samples, fps):
     snap_shop_names(samples, fps)
     conf = 2 if fps <= 3 else 3
 
-    def fr(k):
-        return [s.get(k + "_fresh", True) for s in samples]
+    def kd(k):
+        return [s.get(k + "_kind", "new") for s in samples]
     series = {
-        "round": stabilize([s["round"] for s in samples], conf, round_key, fresh=fr("round")),
-        "gold": stabilize([s["gold"] for s in samples], conf, fresh=fr("gold")),
-        # cấp TFT không bao giờ giảm → không cho lùi
-        "level": stabilize([s["level"] for s in samples], conf, int, fresh=fr("level"), allow_back=False),
-        "xp": stabilize([s["xp"] for s in samples], conf, fresh=fr("xp")),
+        "round": stabilize([s["round"] for s in samples], conf, kd("round"), next_round_ok),
+        "gold": stabilize([s["gold"] for s in samples], conf, kd("gold")),
+        "level": stabilize([s["level"] for s in samples], conf, kd("level"), level_step_ok),
+        "xp": stabilize([s["xp"] for s in samples], conf, kd("xp")),
     }
     shop = []
     for s in samples:
         names = tuple(s.get(k) or "" for k in layout.SHOP)
         shop.append(None if not any(names) else names)     # cả 5 ô trống = cửa hàng đang ẩn
-    series["shop"] = stabilize(shop, conf, fresh=[any(s.get(k + "_fresh", True) for k in layout.SHOP)
-                                                   for s in samples])
+    rank = {"new": 3, "reread": 2, "recheck": 1, "same": 0}
+    shop_kinds = [max((s.get(k + "_kind", "new") for k in layout.SHOP), key=rank.get) for s in samples]
+    series["shop"] = stabilize(shop, conf, shop_kinds)
     series["gold"] = drop_gold_blips(series, samples, fps)
     return series
 
 
-def drop_gold_blips(S, samples, fps, max_sec=6.0):
-    """Vàng nhảy LÊN rồi tụt xuống trong <= max_sec giây mà cửa hàng / XP / cấp không đổi gì → đọc sai
-    (vd. 10 đọc thành 16 suốt vài giây ở video nén). Thay đoạn đó bằng giá trị sau."""
+def drop_gold_blips(S, samples, fps, max_sec=2 * REREAD_SEC + 1, gap_sec=1.5):
+    """Vàng nhảy LÊN rồi tụt xuống trong <= max_sec giây mà cửa hàng / XP / cấp không đổi gì từ sau lúc vọt lên
+    tới gap_sec sau lúc tụt xuống → đọc sai (vd. 10 đọc thành 16 suốt vài giây ở video nén).
+    Cửa sổ rộng để không xoá nhầm roll / mua thật khi tên tướng trong cửa hàng hiện trễ hơn số vàng (hoạt ảnh lật thẻ)."""
     g = list(S["gold"])
     n = len(g)
     segs, i = [], 0
@@ -229,8 +263,12 @@ def drop_gold_blips(S, samples, fps, max_sec=6.0):
             continue
         if samples[b1]["t"] - samples[b0]["t"] + 1.0 / fps > max_sec:
             continue
-        if any(S[key][c0] != S[key][b1] for key in ("shop", "xp", "level")):
-            continue                     # có thứ khác đổi đúng lúc vàng giảm → có thể là tiêu thật
+        # thứ khác đổi SAU lúc vàng vọt lên (tới gap_sec sau lúc vàng tụt) → có thể là roll / mua thật mà cửa hàng
+        # hiện tên mới trễ. (Đổi đúng lúc vàng vọt lên — vd. cửa hàng làm mới đầu vòng — thì không tính.)
+        gap = int(round(gap_sec * fps))
+        hi = min(n - 1, c0 + gap)
+        if any(S[key][x] != S[key][b0] for key in ("shop", "xp", "level") for x in range(b0 + 1, hi + 1)):
+            continue
         for x in range(b0, b1 + 1):
             g[x] = vc
     return g
@@ -408,7 +446,8 @@ def keyframes(info, prof, rounds, out_dir, lang, player_name, on_progress, cance
         r["keyframe_t"] = round(t, 1)
         r["traits_raw"] = ocr.read_traits(layout.crop(frame, prof["boxes"]["traits"]), lang)
         r["traits"] = ocr.parse_traits(r["traits_raw"])
-        r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name, info["h"])
+        r["players"], r["players_panel"] = read_players_vote([frame] + extra, prof, lang, player_name,
+                                                             layout.effective_height(prof, info["h"]))
         me = [p for p in r["players"] if p["me"]]
         r["hp"] = me[0]["hp"] if me else None
         r["hp_others"] = [p["hp"] for p in r["players"] if not p["me"]]

@@ -85,6 +85,19 @@ def save(prof):
         json.dump(prof, f, ensure_ascii=False, indent=2)
 
 
+def effective_height(prof, src_h):
+    """Chiều cao HUD hiệu dụng: video 1080p nhưng quay cửa sổ game nhỏ (vùng 'players' khoanh nhỏ hơn mặc định)
+    thì chữ số cũng nhỏ như video thấp hơn."""
+    if not src_h:
+        return src_h
+    b, d = prof["boxes"].get("players"), DEFAULT["boxes"]["players"]
+    try:
+        ratio = (b[3] - b[1]) / (d[3] - d[1])
+    except (TypeError, ZeroDivisionError, IndexError):
+        ratio = 1.0
+    return int(round(src_h * min(1.0, ratio)))
+
+
 def crop(frame, box):
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
