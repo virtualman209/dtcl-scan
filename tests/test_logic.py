@@ -17,10 +17,22 @@ def _segments(series):
     return [k for k, _ in groupby(series)]
 
 
+def _round_kinds(lengths):
+    """Chuỗi loại lần đọc như sample_video ở 2 khung/giây: mỗi đoạn hình mới = new, recheck, rồi same,
+    đọc lại định kỳ mỗi 8 giây (16 mẫu)."""
+    out = []
+    for n in lengths:
+        for j in range(n):
+            out.append("new" if j == 0 else "recheck" if j == 1 else "reread" if j % 16 == 0 else "same")
+    return out
+
+
 def test_stabilize_recovers_from_one_wrong_higher_round():
-    vals = ["3-1"] * 10 + ["3-7"] * 4 + ["3-1"] * 6 + ["3-2"] * 20 + ["3-3"] * 20 + ["4-1"] * 20
-    out = analyze.stabilize(vals, 3, plausible=analyze.next_round_ok)
-    assert _segments(out) == ["3-1", "3-2", "3-3", "4-1"]
+    # 1 lần đọc lại định kỳ ra '3-7' (chép sang các mẫu sau), lần đọc lại kế tiếp ra lại '3-1'
+    vals = ["3-1"] * 16 + ["3-7"] * 16 + ["3-1"] * 8 + ["3-2"] * 40 + ["3-3"] * 40 + ["4-1"] * 40
+    kinds = _round_kinds([40, 40, 40, 40])
+    out = analyze.stabilize(vals, 2, kinds, analyze.next_round_ok)
+    assert [(k, len(list(g))) for k, g in groupby(out)] == [("3-1", 40), ("3-2", 40), ("3-3", 40), ("4-1", 40)]
 
 
 def test_stabilize_backdates_to_first_read():
@@ -44,6 +56,32 @@ def test_round_end_values_not_from_next_round():
     ev = analyze.derive_events(samples, S, 2)
     rounds = analyze.summarize_rounds(samples, S, ev, 8.0)
     assert [(r["round"], r["gold_end"], r["xp"]) for r in rounds] == [("1-1", 5, "2/6"), ("1-2", 10, "4/6")]
+
+
+def test_stabilize_single_wrong_reread_is_a_tie():
+    """Vòng 4 review: MỘT lần đọc lại sai ra giá trị HỢP LÝ không được ghi đè / làm mất vòng, vàng, XP."""
+    seg = _segments
+    # vòng 20s (40 mẫu): lần đọc lại thứ nhất của 3-2 ra '3-3' → 3-2 vẫn nguyên 40 mẫu
+    vals = ["3-1"] * 40 + ["3-2"] * 16 + ["3-3"] * 16 + ["3-2"] * 8 + ["3-3"] * 40
+    out = analyze.stabilize(vals, 2, _round_kinds([40, 40, 40]), analyze.next_round_ok)
+    assert [(k, len(list(g))) for k, g in groupby(out)] == [("3-1", 40), ("3-2", 40), ("3-3", 40)]
+    # vàng 60: lần đọc lại ra 50, rồi vàng đổi thật (mua XP → 56) trước lần đọc lại kế → 50 không bao giờ được nhận
+    vals = [60] * 16 + [50] * 6 + [56] * 20
+    kinds = _round_kinds([22, 20])
+    assert seg(analyze.stabilize(vals, 2, kinds)) == [60, 56]
+    assert 50 not in analyze.stabilize(vals, 2, kinds)
+    # XP tương tự
+    vals = ["4/10"] * 16 + ["9/10"] * 6 + ["8/10"] * 20
+    assert seg(analyze.stabilize(vals, 2, kinds)) == ["4/10", "8/10"]
+
+
+def test_stabilize_undo_needs_two_independent_reads():
+    """Khung đổi sang 3-3 bị đọc nhầm thành giá trị trước đó '3-1' (new + recheck trên cùng hình):
+    không được hoàn tác xoá cả vòng 3-2."""
+    vals = ["3-1"] * 40 + ["3-2"] * 40 + ["3-1"] * 16 + ["3-3"] * 24
+    out = analyze.stabilize(vals, 2, _round_kinds([40, 40, 40]), analyze.next_round_ok)
+    segs = [(k, len(list(g))) for k, g in groupby(out)]
+    assert segs[0] == ("3-1", 40) and segs[1] == ("3-2", 40) and segs[-1][0] == "3-3", segs
 
 
 def test_keep_descending():
@@ -130,14 +168,16 @@ def test_stabilize_change_frame_cases():
 
     def seg(r):
         return [(k, len(list(g))) for k, g in groupby(r)]
-    k = _k(("new", 1), ("same", 9), ("new", 1), ("recheck", 1), ("same", 14), ("reread", 1), ("same", 19))
-    # vòng: 3-1 → (đọc nhầm 3-7) → 3-2: không kẹt ở 3-7, ranh giới vòng ở khung đổi
+    k = _k(("new", 1), ("same", 9), ("new", 1), ("recheck", 1), ("same", 14), ("reread", 1), ("same", 15),
+           ("reread", 1), ("same", 3))
+    # vòng: 3-1 → (đọc nhầm 3-7 ở khung đổi) → 3-2 (2 lần đọc lại): không kẹt ở 3-7, ranh giới vòng ở khung đổi
     r = analyze.stabilize(["3-1"] * 10 + ["3-7"] * 16 + ["3-2"] * 20, 2, k, analyze.next_round_ok)
     assert seg(r) == [("3-1", 10), ("3-2", 36)]
     # cấp: 4 → (đọc nhầm 9) → 5
     assert seg(analyze.stabilize([4] * 10 + [9] * 16 + [5] * 20, 2, k, analyze.level_step_ok)) == [(4, 10), (5, 36)]
-    # vàng: 13 → (đọc nhầm 29 hai lần trên cùng hình) → lần đọc lại ra 19: cả đoạn là 19
-    assert seg(analyze.stabilize([13] * 10 + [29] * 16 + [19] * 20, 2, k)) == [(13, 10), (19, 36)]
+    # vàng: 13 → (đọc nhầm 29 hai lần trên cùng hình) → 2 lần đọc lại ra 19: đổi sang 19 từ lần đọc lại
+    # (đoạn 29 ngắn được drop_gold_blips xử lý ở clean())
+    assert seg(analyze.stabilize([13] * 10 + [29] * 16 + [19] * 20, 2, k)) == [(13, 10), (29, 16), (19, 20)]
     # cửa hàng: lần đọc đầu ở khung đổi sai 1 ô, lần đọc ngay sau đúng → vẫn nhận cửa hàng mới
     k2 = _k(("new", 1), ("same", 9), ("new", 1), ("recheck", 1), ("same", 19))
     assert seg(analyze.stabilize(["a"] * 10 + ["X"] + ["b"] * 20, 2, k2)) == [("a", 10), ("b", 21)]
@@ -213,3 +253,45 @@ def test_hard_scenario_lagged_shop(workdir):
     assert got == want, (got, want)
     ends = {r["round"]: r["gold_end"] for r in m["rounds"]}
     assert all(ends[w["round"]] == w["gold_end"] for w in truth["round_end"]), ends
+
+
+def test_reread_wrong_plausible_values_do_not_corrupt(fake1080, monkeypatch):
+    """Vòng 4 review: lần đọc lại định kỳ đầu tiên (OCR thứ 3) sai ra giá trị HỢP LÝ — vòng 3-2→'3-3', cấp 4→5,
+    vàng 19→9; và khung đổi sang 3-3 đọc nhầm 2 lần thành vòng trước '3-1' (hoàn tác trên cùng hình).
+    Không được mất / bịa hành động, vòng, vàng cuối vòng."""
+    import threading
+    from collections import Counter
+    orig = ocr.read_field
+    lock = threading.Lock()
+    cnt, log = {}, []
+    rules = {("round", "3-2"): ((3,), "3-3"), ("level", 4): ((3,), 5), ("gold", 19): ((3,), 9),
+             ("round", "3-3"): ((1, 2), "3-1")}
+
+    def fake(c, key, ftype, lang="eng"):
+        raw, val = orig(c, key, ftype, lang)
+        with lock:
+            n = cnt[(key, val)] = cnt.get((key, val), 0) + 1
+            r = rules.get((key, val))
+            if r and n in r[0]:
+                log.append((key, val))
+                return str(r[1]), r[1]
+        return raw, val
+
+    monkeypatch.setattr(ocr, "read_field", fake)
+    o = dict(core.DEFAULT_SETTINGS, fps=2, keyframes=False, chat_pack=False)
+    rep = analyze.run_analysis(fake1080["video"], o, log=lambda s: None)
+    m = json.load(open(os.path.join(os.path.dirname(rep), "match.json"), encoding="utf-8"))
+    assert set(log) == set(rules), log
+    truth = fake1080["truth"]
+    want = Counter((a["round"], a["type"], a.get("name", "")) for a in truth["actions"])
+    got = Counter()
+    for e in m["events"]:
+        if e["type"] in ("buy_xp", "reroll"):
+            got[(e["round"], e["type"], "")] += int(e["detail"].split("x")[-1])
+        elif e["type"] == "buy":
+            got[(e["round"], "buy", e["detail"])] += 1
+    assert got == want, (got, want)
+    assert [(r["round"], r["duration"]) for r in m["rounds"]] == [(r, 20.0) for r in truth["rounds"]]
+    ends = {r["round"]: (r["gold_end"], r["xp"], r["level"]) for r in m["rounds"]}
+    assert all(ends[w["round"]] == (w["gold_end"], w["xp"], w["level"]) for w in truth["round_end"]), ends
+    assert not [e for e in m["events"] if e["type"] in ("spend", "gain", "free_roll")]

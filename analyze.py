@@ -159,48 +159,53 @@ EVIDENCE = ("new", "reread")
 def stabilize(vals, confirm=2, kinds=None, plausible=None):
     """Chỉ nhận giá trị mới khi nó lặp lại `confirm` mẫu liên tiếp (như bản 1.4 vòng 2), rồi ghi lùi về mẫu đầu
     tiên lệch khỏi giá trị cũ (vòng / vàng / XP đổi cùng một mốc).
-    kinds[i]: 'new' | 'recheck' | 'reread' | 'same' (xem sample_video). plausible(cur, cand) → bước đổi hợp lý
-    (vòng kế tiếp, cấp +1/+2). Bước đổi KHÔNG hợp lý (nhảy vòng, đi lùi) cần >= 2 lần đọc độc lập ('new' /
-    'reread' — đọc lại trên cùng hình không tính), trừ khi là hoàn tác về đúng giá trị ngay trước.
-    Sửa sai: giá trị mới xuất hiện ở lần đọc lại định kỳ (hình KHÔNG đổi) trong khi giá trị hiện tại mới chỉ có
-    1 bằng chứng → giá trị hiện tại là đọc nhầm, thay cả đoạn của nó."""
+    kinds[i]: 'new' (hình vừa đổi) | 'recheck' (khung ngay sau, gần như cùng hình) | 'reread' (đọc lại định kỳ trên
+    hình KHÔNG đổi) | 'same' (chép lại, không OCR). Chỉ 'new' và 'reread' tính là bằng chứng độc lập.
+    Cần >= 2 bằng chứng độc lập khi:
+      - bước đổi không hợp lý theo plausible(cur, cand) (nhảy vòng, đi lùi, cấp +3…);
+      - hoàn tác về giá trị ngay trước (chỉ vòng / cấp);
+      - giá trị mới lần đầu xuất hiện ở lần đọc lại định kỳ: hình không đổi mà số đổi → hoà 1–1 với lần đọc trước,
+        chờ lần đọc độc lập kế tiếp phân xử.
+    Chỉ hoàn tác mới ghi đè ngược cả đoạn giá trị hiện tại, và chỉ khi đoạn đó mới có 1 bằng chứng."""
     n_all = len(vals)
     kinds = kinds or ["new"] * n_all
     out = []
-    cur, cur_start, cur_ev, prev_val, pend_start = None, 0, 0, None, None
-    last_new_is_cur = False          # lần đọc 'new' gần nhất (hình đổi gần nhất) có ra giá trị hiện tại không
+    cur, cur_start, cur_ev, prev_val, pend_start, pend_kind = None, 0, 0, None, None, None
     cand, n, cand_start, ev, cand_kind = None, 0, 0, 0, None
     for i, v in enumerate(vals):
         k = kinds[i]
         if v is None:
             out.append(cur)
             continue
-        if k == "new":
-            last_new_is_cur = v == cur
         if v == cur:
             cand, n, pend_start = None, 0, None
             cur_ev += k in EVIDENCE
             out.append(cur)
             continue
         if pend_start is None:
-            pend_start = i
+            pend_start, pend_kind = i, k
         if v == cand:
             n += 1
             ev += k in EVIDENCE
         else:
             cand, n, cand_start, ev, cand_kind = v, 1, i, int(k in EVIDENCE), k
-        # hoàn tác (chỉ cho vòng / cấp — có luật hợp lý): quay về đúng giá trị ngay trước = giá trị vừa nhận là đọc nhầm
         undo = plausible is not None and cur is not None and cand == prev_val
-        ok = cur is None or plausible is None or undo or plausible(cur, cand)
-        if n >= confirm and (ok or ev >= 2):
-            # đọc lại trên CÙNG hình đã cho ra giá trị hiện tại mà nay ra giá trị khác → giá trị hiện tại là đọc nhầm
-            fix = cur is not None and (undo or (cand_kind == "reread" and cur_ev <= 1 and last_new_is_cur))
-            start = cur_start if fix else (cand_start if cur is None else pend_start)
+        ok = cur is None or plausible is None or plausible(cur, cand)
+        strict = (cur is not None and (not ok or undo or cand_kind == "reread"))
+        if n >= confirm and (not strict or ev >= 2):
+            overwrite = undo and cur_ev <= 1
+            # ghi lùi tới chỗ HÌNH bắt đầu đổi (đoạn chờ mở đầu bằng 1 lần đọc 'new', vd. khung đổi đọc nhầm 3-7);
+            # đoạn chờ mở đầu bằng lần đọc lại trên hình cũ (đọc nhầm, bị loại) thì không kéo giá trị mới về trước
+            if overwrite:
+                start = cur_start
+            elif cur is None or pend_kind not in ("new", "recheck"):
+                start = cand_start
+            else:
+                start = pend_start
             for x in range(start, i):
                 out[x] = cand
-            prev_val = None if fix else cur
+            prev_val = None if undo else cur
             cur, cur_start, cur_ev = cand, start, ev
-            last_new_is_cur = last_new_is_cur or cand_kind == "new"
             cand, n, pend_start = None, 0, None
         out.append(cur)
     return out
