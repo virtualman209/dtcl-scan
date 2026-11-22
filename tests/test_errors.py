@@ -116,10 +116,15 @@ def test_old_profile_and_settings_compatible(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "PROFILE_DIR", str(tmp_path / "profiles"))
     monkeypatch.setattr(core, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     os.makedirs(core.PROFILE_DIR)
-    old = {"name": "cu", "calibrated": True, "boxes": {"gold": [0.5, 0.8, 0.55, 0.85]}, "la": 1}
+    # vùng vàng cũ rộng (dính icon đồng xu, bao trùm vùng mặc định) → tự thay bằng vùng mặc định mới;
+    # vùng cấp người dùng khoanh ở chỗ khác hẳn (HUD lệch) → giữ nguyên
+    old = {"name": "cu", "calibrated": True, "la": 1,
+           "boxes": {"gold": [0.5, 0.8, 0.56, 0.85], "level": [0.30, 0.50, 0.35, 0.55]}}
     json.dump(old, open(os.path.join(core.PROFILE_DIR, "cu.json"), "w", encoding="utf-8"))
     p = layout.load("cu")
-    assert p["boxes"]["gold"] == [0.5, 0.8, 0.55, 0.85]
+    assert p["boxes"]["gold"] == layout.DEFAULT["boxes"]["gold"]
+    assert p["boxes"]["level"] == [0.30, 0.50, 0.35, 0.55]
+    assert "gold" in p["migrated"] and "level" not in p["migrated"]
     assert set(layout.FIELDS) <= set(p["boxes"])
     json.dump({"fps": "3", "profile": "cu"}, open(core.SETTINGS_PATH, "w", encoding="utf-8"))
     st = core.get_settings()

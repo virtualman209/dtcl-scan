@@ -1,0 +1,6 @@
+{
+  "_ghi_chu": "Khung hình lấy từ VIDEO THẬT của người dùng (ảnh chốt do DTCLScan 1.4.0 xuất ra, 1920x1080, video nén). Đáp án đọc bằng mắt. profile_user_v13.json = profile người dùng đã căn chỉnh từ bản cũ (vùng vàng dính icon đồng xu, vùng cấp cắt 'Cấp 10', vùng máu rộng kiểu cũ).",
+  "v_2-2.jpg": {"round": "2-2", "gold": 11, "level": 4, "xp": "2/10", "shop": ["Veigar", "Mâm Non", "", "Varus", "Rammus"]},
+  "v_3-6.jpg": {"round": "3-6", "hp_me": 87, "hp_others": [103, 75, 71, 68, 51, 48, 47]},
+  "v_6-1.jpg": {"round": "6-1", "gold": 72, "level": 10}
+}

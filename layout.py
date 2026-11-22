@@ -36,7 +36,7 @@ def _default_boxes():
     px = {
         "round": (758, 3, 824, 34),          # "3-5" (bỏ icon mỏ neo bên trái)
         "gold": (1014, 882, 1068, 915),      # "43" (bỏ icon đồng vàng)
-        "level": (338, 880, 404, 914),       # "Cấp 7"
+        "level": (338, 880, 414, 914),       # "Cấp 7" … "Cấp 10" (đủ rộng cho 2 chữ số)
         "xp": (458, 880, 520, 913),          # "0/56"
         "traits": (100, 255, 258, 742),      # cột tộc/hệ bên trái (không lấy icon)
         "players": (1780, 158, 1856, 810),   # cột số máu: từ số máu to của bạn → hết ô máu nhỏ (không lấy tên, ảnh)
@@ -73,13 +73,44 @@ def load(name):
         # mặc định MỚI trong code, không kẹt toạ độ cũ sau khi cập nhật
         if data.get("calibrated"):
             prof["boxes"].update(data.get("boxes", {}))
+            if data.get("schema", 1) < SCHEMA:
+                _migrate(prof)
     except Exception:
         pass
     prof["name"] = name
     return prof
 
 
+SCHEMA = 2
+# Vùng mà ý nghĩa / cỡ đúng đã đổi so với bản cũ. Profile cũ (schema 1) khoanh RỘNG hơn mặc định
+# (dính icon đồng vàng, cắt "Cấp 10", cột máu kèm tên + ảnh đại diện) → đọc sai. Nếu vùng cũ bao trùm
+# phần lớn vùng mặc định mới thì thay bằng vùng mặc định mới (người dùng không phải căn lại).
+_MIGRATE = ("gold", "level", "players")
+
+
+def _overlap_ratio(inner, outer):
+    ix = max(0.0, min(inner[2], outer[2]) - max(inner[0], outer[0]))
+    iy = max(0.0, min(inner[3], outer[3]) - max(inner[1], outer[1]))
+    area = max(1e-9, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+    return ix * iy / area
+
+
+def _migrate(prof):
+    changed = []
+    for k in _MIGRATE:
+        d, u = DEFAULT["boxes"][k], prof["boxes"].get(k)
+        if not u or u == d:
+            continue
+        if _overlap_ratio(d, u) >= 0.75:
+            prof["boxes"][k] = list(d)
+            changed.append(k)
+    prof["migrated"] = changed
+    prof["schema"] = SCHEMA
+    return changed
+
+
 def save(prof):
+    prof["schema"] = SCHEMA
     os.makedirs(core.PROFILE_DIR, exist_ok=True)
     with open(os.path.join(core.PROFILE_DIR, prof["name"] + ".json"), "w", encoding="utf-8") as f:
         json.dump(prof, f, ensure_ascii=False, indent=2)

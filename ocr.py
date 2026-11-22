@@ -425,12 +425,23 @@ def read_players(crop_img, lang="eng", player_name="", src_h=None):
 
     def other(y0, y1):
         L = y1 - y0
+        # ô máu nằm trong dải tối; video thật dải tối ngắn hơn (chữ số ở nửa dưới) → lấy trọn dải
+        # thường chữ số nằm nửa trên dải tối; video thật đôi khi dải tối ngắn hơn và chữ số ở nửa dưới
+        # → đọc nửa trên trước, không chắc thì đọc trọn dải
         txt, v, c = read_digits(crop_img[max(0, y0 - 2):y0 + int(L * 0.6), x_other:W], right=PL_CFG["right"])
+        if v is None or c < 0.65:
+            txt, v, c = read_digits(crop_img[max(0, y0 - 2):min(H, y1 + 2), x_other:W], right=PL_CFG["right"])
         if v is not None and c >= 0.65:
             out.append({"y": int(y0), "hp": v, "me": False, "conf": round(c, 2), "raw": txt})
 
-    for y0, y1 in _dark_runs(prof < PL_CFG["dark"], int(28 * k), max(3, int(round(PL_CFG["close"] * k)))):
+    # ngưỡng "tối" thích nghi: nền cảnh game có thể tối (video thật) hoặc sáng (bầu trời) → so với nền
+    bg = float(np.percentile(prof, 70))
+    dark = PL_CFG["dark"] if bg >= 100 else max(28.0, bg * 0.7)
+    runs = _dark_runs(prof < dark, int(18 * k), max(3, int(round(PL_CFG["close"] * k))))
+    for y0, y1 in runs:
         L = y1 - y0
+        if L < 20 * k:
+            continue
         if L <= 62 * k:
             other(y0, y1)
             continue
@@ -441,6 +452,13 @@ def read_players(crop_img, lang="eng", player_name="", src_h=None):
             out.append({"y": int(y0), "hp": v, "me": True, "conf": round(c, 2), "raw": txt})
         if L - top >= 28 * k:
             other(y1 - int(44 * k), y1)
+    if not any(r["me"] for r in out):
+        me = _find_big_hp(crop_img, k)
+        if me:
+            # bỏ dòng "người khác" trùng chỗ với số máu to (ô lục giác của bạn bị nhận nhầm là ô máu nhỏ)
+            out = [r for r in out if abs(r["y"] - me["y"]) > 30 * k]
+            out.append(me)
+    out.sort(key=lambda r: r["y"])
     if src_h and src_h < MIN_SRC_H_OTHERS:
         return [r for r in out if r["me"]], "low_res"
     out, dropped = _keep_descending(out)
@@ -451,6 +469,31 @@ def read_players(crop_img, lang="eng", player_name="", src_h=None):
     if dropped:
         return out, "uncertain"
     return out, "ok"
+
+
+def _find_big_hp(crop_img, k=1.0):
+    """Số máu TO của bạn (cao ~16–24px ở 1080p) ở nửa trái cột máu: tìm các chữ số sáng cao, gom 1 dòng, đọc."""
+    H, W = crop_img.shape[:2]
+    x0, x1 = int(0.1 * W), int(0.6 * W)
+    g = whiteness(crop_img[:, x0:x1])
+    _, b = cv2.threshold(g, 150, 255, cv2.THRESH_BINARY)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(b, 8)
+    cands = [st[i] for i in range(1, n) if 13 * k <= st[i][3] <= 32 * k and st[i][2] <= 1.3 * st[i][3]
+             and st[i][4] >= 0.15 * st[i][2] * st[i][3]]
+    if not cands:
+        return None
+    best = None
+    for c in cands:                           # gom các chữ số cùng dòng, cùng cỡ
+        grp = [d for d in cands if abs((d[1] + d[3] / 2) - (c[1] + c[3] / 2)) < 0.4 * c[3]
+               and abs(d[3] - c[3]) < 0.3 * c[3]]
+        if best is None or (len(grp), c[3]) > (len(best), best[0][3]):
+            best = grp
+    ya = max(0, min(d[1] for d in best) - int(5 * k))
+    yb = min(H, max(d[1] + d[3] for d in best) + int(5 * k))
+    txt, v, c = read_digits(crop_img[ya:yb, x0:x1], scale=4 / k, min_h=13 * k)
+    if v is None or c < 0.75:
+        return None
+    return {"y": int(ya), "hp": v, "me": True, "conf": round(c, 2), "raw": txt}
 
 
 def _keep_descending(rows):
@@ -478,8 +521,34 @@ def _keep_descending(rows):
     return [rows[k] for k in keep], n - len(keep)
 
 
+_TSV_OK = None
+
+
+def _ensure_tsv_config():
+    """Chế độ 'tsv' của Tesseract cần file tessdata/configs/tsv. Thư mục tessdata riêng của DTCLScan
+    (install.bat chỉ tải eng/vie.traineddata) KHÔNG có file đó → mọi lần đọc kèm độ tin cậy ra RỖNG
+    (lỗi 1.4.0 trên Windows: không đọc được tên tướng / tộc hệ). Tự tạo file cấu hình nếu thiếu."""
+    global _TSV_OK
+    if _TSV_OK is not None:
+        return _TSV_OK
+    _TSV_OK = True
+    if os.path.isfile(os.path.join(core.TESSDATA_DIR, "eng.traineddata")):
+        cfg = os.path.join(core.TESSDATA_DIR, "configs", "tsv")
+        if not os.path.isfile(cfg):
+            try:
+                os.makedirs(os.path.dirname(cfg), exist_ok=True)
+                with open(cfg, "w", encoding="ascii") as f:
+                    f.write("tessedit_create_tsv 1\n")
+            except OSError:
+                _TSV_OK = False
+    return _TSV_OK
+
+
 def tesseract_conf(img, psm="7", lang="eng", whitelist=None):
-    """Như tesseract() nhưng trả (chuỗi, độ tin cậy trung bình 0..100) — dùng để chọn cách xử lý ảnh tốt nhất."""
+    """Như tesseract() nhưng trả (chuỗi, độ tin cậy trung bình 0..100) — dùng để chọn cách xử lý ảnh tốt nhất.
+    Nếu chế độ tsv không dùng được thì vẫn trả chữ (độ tin cậy giả định 50) thay vì rỗng."""
+    if not _ensure_tsv_config():
+        return tesseract(img, psm, whitelist, lang), 50.0
     exe = core.find_bin("tesseract")
     ok, png = cv2.imencode(".png", img)
     if not ok:
@@ -500,6 +569,8 @@ def tesseract_conf(img, psm="7", lang="eng", whitelist=None):
                 continue
             words.append(p[11].strip())
             confs.append(c)
+    if not words and r.returncode != 0:       # tsv lỗi (thiếu cấu hình…) → đọc thường, không bỏ trống
+        return tesseract(img, psm, whitelist, lang), 50.0
     return " ".join(words), (float(np.mean(confs)) if confs else 0.0)
 
 

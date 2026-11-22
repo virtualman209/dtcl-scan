@@ -104,6 +104,10 @@ def test_default_profile_follows_code(tmp_path, monkeypatch):
     assert layout.load("default_1080p")["boxes"]["players"] == layout.DEFAULT["boxes"]["players"]
     old["calibrated"] = True
     json.dump(old, open(os.path.join(core.PROFILE_DIR, "default_1080p.json"), "w", encoding="utf-8"))
+    # profile cũ (schema 1) khoanh cột máu RỘNG kiểu cũ (bao trùm vùng mới) → tự chuyển sang vùng mới
+    assert layout.load("default_1080p")["boxes"]["players"] == layout.DEFAULT["boxes"]["players"]
+    old["schema"] = 2                             # profile căn chỉnh bằng bản mới → giữ nguyên ý người dùng
+    json.dump(old, open(os.path.join(core.PROFILE_DIR, "default_1080p.json"), "w", encoding="utf-8"))
     assert layout.load("default_1080p")["boxes"]["players"] == [0.86, 0.14, 1.0, 0.76]
 
 
